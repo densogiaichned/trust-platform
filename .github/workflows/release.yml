@@ -150,6 +150,8 @@ jobs:
     name: Publish
     needs: build
     runs-on: ubuntu-latest
+    env:
+      VSCE_PAT: ${{ secrets.VSCE_PAT }}
     steps:
       - uses: actions/checkout@v4
 
@@ -176,13 +178,11 @@ jobs:
         run: npm install -g @vscode/vsce
 
       - name: Publish to VS Code Marketplace
-        if: ${{ secrets.VSCE_PAT != '' }}
+        if: ${{ env.VSCE_PAT != '' }}
         run: vsce publish --packagePath vsix-artifacts/*.vsix
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
       - name: Skip Marketplace publish (missing VSCE_PAT)
-        if: ${{ secrets.VSCE_PAT == '' }}
+        if: ${{ env.VSCE_PAT == '' }}
         run: echo "VSCE_PAT not set; skipping Marketplace publish"
 
       - name: Create GitHub Release
