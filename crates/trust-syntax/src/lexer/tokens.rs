@@ -960,7 +960,7 @@ pub enum TokenKind {
     // DIRECT ADDRESSES (Hardware I/O)
     // =========================================================================
     /// Direct address: %IX0.0, %QW10, %MD100
-    /// Format: %[I|Q|M][X|B|W|D|L]<address>
+    /// Format: `%[I|Q|M][X|B|W|D|L]<address>`
     #[regex(r"%[IQM]\*")]
     #[regex(r"%[IQM][XBWDL]?[0-9]+(\.[0-9]+)*")]
     #[regex(r"%[XBWDL][0-9]+")]

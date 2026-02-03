@@ -138,8 +138,10 @@ fn should_skip(path: &Path) -> bool {
 }
 
 fn display_path(path: &Path, repo_root: &Path) -> String {
-    path.strip_prefix(repo_root)
+    let display = path
+        .strip_prefix(repo_root)
         .unwrap_or(path)
         .to_string_lossy()
-        .to_string()
+        .to_string();
+    display.replace('\', "/")
 }
