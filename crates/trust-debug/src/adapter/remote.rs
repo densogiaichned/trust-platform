@@ -2,6 +2,7 @@
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
+#[cfg(unix)]
 use std::path::PathBuf;
 
 use serde::Deserialize;

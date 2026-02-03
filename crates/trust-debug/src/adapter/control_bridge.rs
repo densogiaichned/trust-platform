@@ -1,6 +1,7 @@
 //! Control-server bridge for debug sessions (inline values, tooling).
 
 use std::collections::VecDeque;
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};

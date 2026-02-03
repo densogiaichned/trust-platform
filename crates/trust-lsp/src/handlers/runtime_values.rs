@@ -28,6 +28,7 @@ impl ControlEndpoint {
         if let Some(rest) = text.strip_prefix("tcp://") {
             return Some(Self::Tcp(rest.to_string()));
         }
+        #[cfg(unix)]
         if let Some(rest) = text.strip_prefix("unix://") {
             return Some(Self::Unix(std::path::PathBuf::from(rest)));
         }
@@ -48,8 +49,6 @@ impl ControlClient {
             ControlEndpoint::Tcp(addr) => ControlStream::Tcp(TcpStream::connect(addr).ok()?),
             #[cfg(unix)]
             ControlEndpoint::Unix(path) => ControlStream::Unix(UnixStream::connect(path).ok()?),
-            #[cfg(not(unix))]
-            _ => return None,
         };
         Some(Self {
             seq: 1,
