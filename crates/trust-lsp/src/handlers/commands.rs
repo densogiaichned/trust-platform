@@ -20,7 +20,7 @@ use crate::handlers::lsp_utils::{
     offset_to_position, position_to_offset, text_document_identifier_for_edit,
 };
 use crate::library_graph::build_library_graph;
-use crate::state::{uri_to_path, ServerState};
+use crate::state::{path_to_uri, uri_to_path, ServerState};
 
 pub const MOVE_NAMESPACE_COMMAND: &str = "trust-lsp.moveNamespace";
 pub const PROJECT_INFO_COMMAND: &str = "trust-lsp.projectInfo";
@@ -76,8 +76,7 @@ pub(crate) fn project_info_value(state: &ServerState, args: Vec<Value>) -> Optio
                 configs.retain(|(root, _)| root == &root_uri);
             } else if let Some(text_document) = parsed.text_document {
                 if let Some(config) = state.workspace_config_for_uri(&text_document.uri) {
-                    let root_uri =
-                        Url::from_file_path(&config.root).unwrap_or(text_document.uri.clone());
+                    let root_uri = path_to_uri(&config.root).unwrap_or(text_document.uri.clone());
                     configs = vec![(root_uri, config)];
                 }
             }
@@ -335,14 +334,17 @@ fn derive_target_uri(state: &ServerState, parts: &[smol_str::SmolStr]) -> Option
         return None;
     }
     let root = state.workspace_folders().into_iter().next()?;
-    let root_path = uri_to_path(&root)?;
-    let mut path = root_path;
-    for part in &parts[..parts.len().saturating_sub(1)] {
-        path.push(part.as_str());
-    }
+    let mut target = root.clone();
     let file_name = format!("{}.st", parts.last()?.as_str());
-    path.push(file_name);
-    Url::from_file_path(path).ok()
+    {
+        let mut segments = target.path_segments_mut().ok()?;
+        segments.pop_if_empty();
+        for part in &parts[..parts.len().saturating_sub(1)] {
+            segments.push(part.as_str());
+        }
+        segments.push(&file_name);
+    }
+    Some(target)
 }
 
 fn build_namespace_insert_text(target_content: &str, namespace_text: &str) -> String {

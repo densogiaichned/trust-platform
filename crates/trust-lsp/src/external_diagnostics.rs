@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Position, Range, Url};
 
 use crate::config::ProjectConfig;
+use crate::state::path_to_uri;
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
@@ -99,7 +100,7 @@ fn entry_uri(root: &Path, entry: &ExternalDiagnosticEntry) -> Option<Url> {
     }
     let path = entry.path.as_ref()?;
     let path = resolve_path(root, path);
-    Url::from_file_path(path).ok()
+    path_to_uri(&path)
 }
 
 fn resolve_path(root: &Path, entry: &str) -> PathBuf {

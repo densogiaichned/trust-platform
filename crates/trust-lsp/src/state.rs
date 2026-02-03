@@ -7,7 +7,7 @@ use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -253,15 +253,48 @@ impl ServerState {
 
     /// Returns the best-matching workspace configuration for a document URI.
     pub fn workspace_config_for_uri(&self, uri: &Url) -> Option<ProjectConfig> {
-        let path = uri_to_path(uri)?;
         let configs = self.workspace_configs.read();
+        if let Some(path) = uri_to_path(uri) {
+            let path = normalize_match_path(path);
+            let mut best: Option<(usize, ProjectConfig)> = None;
+            for (root_url, config) in configs.iter() {
+                let Some(root_path) = uri_to_path(root_url) else {
+                    continue;
+                };
+                let root_path = normalize_match_path(root_path);
+                if path.starts_with(&root_path) {
+                    let depth = root_path.components().count();
+                    if best
+                        .as_ref()
+                        .is_none_or(|(best_depth, _)| depth > *best_depth)
+                    {
+                        best = Some((depth, config.clone()));
+                    }
+                }
+            }
+            if best.is_some() {
+                return best.map(|(_, config)| config);
+            }
+        }
+
+        let uri_segments: Vec<_> = uri
+            .path_segments()
+            .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+            .unwrap_or_default();
         let mut best: Option<(usize, ProjectConfig)> = None;
         for (root_url, config) in configs.iter() {
-            let Some(root_path) = uri_to_path(root_url) else {
+            let root_segments: Vec<_> = root_url
+                .path_segments()
+                .map(|segments| segments.filter(|segment| !segment.is_empty()).collect())
+                .unwrap_or_default();
+            if root_segments.is_empty() {
                 continue;
-            };
-            if path.starts_with(&root_path) {
-                let depth = root_path.components().count();
+            }
+            if uri_segments.len() < root_segments.len() {
+                continue;
+            }
+            if uri_segments[..root_segments.len()] == root_segments[..] {
+                let depth = root_segments.len();
                 if best
                     .as_ref()
                     .is_none_or(|(best_depth, _)| depth > *best_depth)
@@ -446,7 +479,7 @@ impl ServerState {
         let project = self.project.read();
         let key = project.key_for_file_id(file_id)?;
         match key {
-            SourceKey::Path(path) => Url::from_file_path(path).ok(),
+            SourceKey::Path(path) => path_to_uri(path),
             SourceKey::Virtual(name) => Url::parse(name).ok(),
         }
     }
@@ -642,6 +675,20 @@ impl Default for ServerState {
     }
 }
 
+pub(crate) fn path_to_uri(path: &Path) -> Option<Url> {
+    if let Ok(url) = Url::from_file_path(path) {
+        return Some(url);
+    }
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut raw = path.to_string_lossy().replace('\\', "/");
+    if !raw.starts_with('/') {
+        raw = format!("/{raw}");
+    }
+    Url::parse(&format!("file://{raw}")).ok()
+}
+
 pub(crate) fn uri_to_path(uri: &Url) -> Option<PathBuf> {
     if let Ok(path) = uri.to_file_path() {
         return Some(path);
@@ -670,6 +717,20 @@ fn now_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
+}
+
+fn normalize_match_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn canonicalize_path(path: PathBuf) -> PathBuf {

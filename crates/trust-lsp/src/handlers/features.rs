@@ -23,7 +23,7 @@ use crate::config::{find_config_file, WorkspaceVisibility, CONFIG_FILES};
 use crate::external_diagnostics::ExternalFixData;
 use crate::handlers::diagnostics::collect_diagnostics;
 use crate::library_docs::{doc_for_name, library_doc_map};
-use crate::state::{uri_to_path, ServerState};
+use crate::state::{path_to_uri, uri_to_path, ServerState};
 use tracing::{debug, warn};
 use trust_ide::goto_def::goto_definition as ide_goto_definition;
 use trust_ide::util::scope_at_position;
@@ -1037,14 +1037,42 @@ fn maybe_rename_pou_file(
         return None;
     }
 
-    let old_path = uri_to_path(&old_uri)?;
-    let extension = old_path.extension().and_then(|ext| ext.to_str())?;
-    let new_path = old_path.with_file_name(format!("{new_name}.{extension}"));
-    if new_path == old_path || new_path.exists() {
-        return None;
+    let old_path = uri_to_path(&old_uri);
+    let extension = old_path
+        .as_ref()
+        .and_then(|path| path.extension().and_then(|ext| ext.to_str()))
+        .or_else(|| {
+            Path::new(old_uri.path())
+                .extension()
+                .and_then(|ext| ext.to_str())
+        })?;
+    let file_name = format!("{new_name}.{extension}");
+
+    if let Some(path) = old_path.as_ref() {
+        let new_path = path.with_file_name(&file_name);
+        if &new_path == path || new_path.exists() {
+            return None;
+        }
+        if let Some(new_uri) = path_to_uri(&new_path) {
+            return Some(RenameFile {
+                old_uri,
+                new_uri,
+                options: Some(RenameFileOptions {
+                    overwrite: Some(false),
+                    ignore_if_exists: Some(true),
+                }),
+                annotation_id: None,
+            });
+        }
     }
 
-    let new_uri = Url::from_file_path(new_path).ok()?;
+    let mut new_uri = old_uri.clone();
+    {
+        let mut segments = new_uri.path_segments_mut().ok()?;
+        segments.pop_if_empty();
+        segments.pop();
+        segments.push(&file_name);
+    }
     Some(RenameFile {
         old_uri,
         new_uri,
@@ -1572,8 +1600,8 @@ fn document_links_for_config_paths(source: &str, root: &Path) -> Vec<DocumentLin
                     let value_start_offset = offset + value_start;
                     let abs_start = value_start_offset + start;
                     let abs_end = value_start_offset + end;
-                    let target = resolve_config_path(root, &text)
-                        .and_then(|path| Url::from_file_path(path).ok());
+                    let target =
+                        resolve_config_path(root, &text).and_then(|path| path_to_uri(&path));
                     let Some(target) = target else {
                         continue;
                     };
@@ -1600,7 +1628,7 @@ fn document_links_for_config_mentions(source: &str, root: &Path) -> Vec<Document
     let Some(config_path) = find_config_file(root) else {
         return Vec::new();
     };
-    let Ok(target) = Url::from_file_path(&config_path) else {
+    let Some(target) = path_to_uri(&config_path) else {
         return Vec::new();
     };
 

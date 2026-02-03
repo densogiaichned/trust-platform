@@ -21,7 +21,7 @@ use trust_syntax::parser::parse;
 use crate::config::{DiagnosticSettings, ProjectConfig, CONFIG_FILES};
 use crate::external_diagnostics::collect_external_diagnostics;
 use crate::library_graph::library_dependency_issues;
-use crate::state::{uri_to_path, ServerState};
+use crate::state::{path_to_uri, uri_to_path, ServerState};
 
 use super::lsp_utils::offset_to_position;
 
@@ -139,7 +139,7 @@ pub(crate) fn workspace_diagnostic(
         let Some(config_path) = config.config_path.clone() else {
             continue;
         };
-        let Ok(uri) = Url::from_file_path(&config_path) else {
+        let Some(uri) = path_to_uri(&config_path) else {
             continue;
         };
         if seen.contains(&uri) {
@@ -495,7 +495,7 @@ fn spec_url(state: &ServerState, spec_path: &str) -> Option<Url> {
         };
         let candidate = root_path.join(spec_path);
         if candidate.exists() {
-            return Url::from_file_path(candidate).ok();
+            return path_to_uri(&candidate);
         }
     }
     None

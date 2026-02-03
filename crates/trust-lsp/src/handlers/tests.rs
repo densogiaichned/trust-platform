@@ -2094,10 +2094,10 @@ path = "extras/ExtraLib"
     };
 
     let links = document_link(&state, params).expect("document links");
-    let src_target = tower_lsp::lsp_types::Url::from_file_path("/workspace/src").unwrap();
-    let lib_target = tower_lsp::lsp_types::Url::from_file_path("/workspace/vendor/lib").unwrap();
+    let src_target = tower_lsp::lsp_types::Url::parse("file:///workspace/src").unwrap();
+    let lib_target = tower_lsp::lsp_types::Url::parse("file:///workspace/vendor/lib").unwrap();
     let extra_target =
-        tower_lsp::lsp_types::Url::from_file_path("/workspace/extras/ExtraLib").unwrap();
+        tower_lsp::lsp_types::Url::parse("file:///workspace/extras/ExtraLib").unwrap();
 
     assert!(links
         .iter()
@@ -3565,8 +3565,8 @@ path = "vendor"
     let client = test_client();
     let root_one = PathBuf::from("/workspace/golden/alpha");
     let root_two = PathBuf::from("/workspace/golden/beta");
-    let root_one_uri = tower_lsp::lsp_types::Url::from_file_path(&root_one).unwrap();
-    let root_two_uri = tower_lsp::lsp_types::Url::from_file_path(&root_two).unwrap();
+    let root_one_uri = tower_lsp::lsp_types::Url::parse("file:///workspace/golden/alpha").unwrap();
+    let root_two_uri = tower_lsp::lsp_types::Url::parse("file:///workspace/golden/beta").unwrap();
     state.set_workspace_folders(vec![root_one_uri.clone(), root_two_uri.clone()]);
     state.set_workspace_config(
         root_one_uri.clone(),

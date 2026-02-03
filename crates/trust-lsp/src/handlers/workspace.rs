@@ -20,7 +20,7 @@ use tracing::info;
 
 use crate::config::{ProjectConfig, CONFIG_FILES};
 use crate::index_cache::IndexCache;
-use crate::state::{uri_to_path, ServerState};
+use crate::state::{path_to_uri, uri_to_path, ServerState};
 use trust_hir::db::SemanticDatabase;
 use trust_hir::symbols::{ScopeId, SymbolId, SymbolTable};
 use trust_hir::{is_reserved_keyword, is_valid_identifier, SymbolKind};
@@ -382,7 +382,7 @@ async fn index_workspace_root(
             continue;
         }
 
-        let Ok(uri) = Url::from_file_path(path) else {
+        let Some(uri) = path_to_uri(path) else {
             skipped += 1;
             report_progress(client, &progress, idx + 1, total, &mut last_percent).await;
             continue;
