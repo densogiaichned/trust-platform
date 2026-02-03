@@ -20,7 +20,7 @@ use crate::handlers::lsp_utils::{
     offset_to_position, position_to_offset, text_document_identifier_for_edit,
 };
 use crate::library_graph::build_library_graph;
-use crate::state::ServerState;
+use crate::state::{uri_to_path, ServerState};
 
 pub const MOVE_NAMESPACE_COMMAND: &str = "trust-lsp.moveNamespace";
 pub const PROJECT_INFO_COMMAND: &str = "trust-lsp.projectInfo";
@@ -316,7 +316,7 @@ fn uri_exists(state: &ServerState, uri: &Url) -> bool {
     if state.get_document(uri).is_some() {
         return true;
     }
-    if let Ok(path) = uri.to_file_path() {
+    if let Some(path) = uri_to_path(uri) {
         return path.exists();
     }
     false
@@ -326,7 +326,7 @@ fn load_document_content(state: &ServerState, uri: &Url) -> Option<String> {
     if let Some(doc) = state.get_document(uri) {
         return Some(doc.content);
     }
-    let path = uri.to_file_path().ok()?;
+    let path = uri_to_path(uri)?;
     std::fs::read_to_string(path).ok()
 }
 
@@ -335,7 +335,7 @@ fn derive_target_uri(state: &ServerState, parts: &[smol_str::SmolStr]) -> Option
         return None;
     }
     let root = state.workspace_folders().into_iter().next()?;
-    let root_path = root.to_file_path().ok()?;
+    let root_path = uri_to_path(&root)?;
     let mut path = root_path;
     for part in &parts[..parts.len().saturating_sub(1)] {
         path.push(part.as_str());

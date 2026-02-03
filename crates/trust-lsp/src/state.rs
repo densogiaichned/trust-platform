@@ -253,11 +253,11 @@ impl ServerState {
 
     /// Returns the best-matching workspace configuration for a document URI.
     pub fn workspace_config_for_uri(&self, uri: &Url) -> Option<ProjectConfig> {
-        let path = uri.to_file_path().ok()?;
+        let path = uri_to_path(uri)?;
         let configs = self.workspace_configs.read();
         let mut best: Option<(usize, ProjectConfig)> = None;
         for (root_url, config) in configs.iter() {
-            let Ok(root_path) = root_url.to_file_path() else {
+            let Some(root_path) = uri_to_path(root_url) else {
                 continue;
             };
             if path.starts_with(&root_path) {
@@ -416,7 +416,7 @@ impl ServerState {
         if let Some(doc) = self.get_document(uri) {
             return Some(doc);
         }
-        let path = uri.to_file_path().ok()?;
+        let path = uri_to_path(uri)?;
         let content = std::fs::read_to_string(&path).ok()?;
         self.index_document(uri.clone(), content);
         self.get_document(uri)
@@ -642,8 +642,22 @@ impl Default for ServerState {
     }
 }
 
-fn source_key_for_uri(uri: &Url) -> SourceKey {
+pub(crate) fn uri_to_path(uri: &Url) -> Option<PathBuf> {
     if let Ok(path) = uri.to_file_path() {
+        return Some(path);
+    }
+    if uri.scheme() == "file" {
+        let path = uri.path();
+        if path.is_empty() {
+            return None;
+        }
+        return Some(PathBuf::from(path));
+    }
+    None
+}
+
+fn source_key_for_uri(uri: &Url) -> SourceKey {
+    if let Some(path) = uri_to_path(uri) {
         SourceKey::from_path(path)
     } else {
         SourceKey::from_virtual(uri.to_string())

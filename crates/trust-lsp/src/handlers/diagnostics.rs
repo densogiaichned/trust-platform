@@ -21,7 +21,7 @@ use trust_syntax::parser::parse;
 use crate::config::{DiagnosticSettings, ProjectConfig, CONFIG_FILES};
 use crate::external_diagnostics::collect_external_diagnostics;
 use crate::library_graph::library_dependency_issues;
-use crate::state::ServerState;
+use crate::state::{uri_to_path, ServerState};
 
 use super::lsp_utils::offset_to_position;
 
@@ -490,7 +490,7 @@ fn is_oop_access_message(message: &str) -> bool {
 
 fn spec_url(state: &ServerState, spec_path: &str) -> Option<Url> {
     for root in state.workspace_folders() {
-        let Ok(root_path) = root.to_file_path() else {
+        let Some(root_path) = uri_to_path(&root) else {
             continue;
         };
         let candidate = root_path.join(spec_path);
@@ -502,7 +502,7 @@ fn spec_url(state: &ServerState, spec_path: &str) -> Option<Url> {
 }
 
 fn is_config_uri(uri: &Url) -> bool {
-    let Ok(path) = uri.to_file_path() else {
+    let Some(path) = uri_to_path(uri) else {
         return false;
     };
     path.file_name()
@@ -518,10 +518,10 @@ fn collect_config_diagnostics(
     root_hint: Option<&Url>,
 ) -> Vec<Diagnostic> {
     let root = root_hint
-        .and_then(|root| root.to_file_path().ok())
+        .and_then(uri_to_path)
         .or_else(|| config_root_for_uri(state, uri))
         .unwrap_or_else(|| PathBuf::from("."));
-    let config_path = uri.to_file_path().ok();
+    let config_path = uri_to_path(uri);
     let config = ProjectConfig::from_contents(&root, config_path, content);
     let mut diagnostics = Vec::new();
     for issue in library_dependency_issues(&config) {
@@ -546,11 +546,7 @@ fn config_root_for_uri(state: &ServerState, uri: &Url) -> Option<PathBuf> {
     state
         .workspace_config_for_uri(uri)
         .map(|config| config.root)
-        .or_else(|| {
-            uri.to_file_path()
-                .ok()
-                .and_then(|path| path.parent().map(Path::to_path_buf))
-        })
+        .or_else(|| uri_to_path(uri).and_then(|path| path.parent().map(Path::to_path_buf)))
 }
 
 fn find_name_range(content: &str, name: &str) -> Range {

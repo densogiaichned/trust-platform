@@ -23,7 +23,7 @@ use crate::config::{find_config_file, WorkspaceVisibility, CONFIG_FILES};
 use crate::external_diagnostics::ExternalFixData;
 use crate::handlers::diagnostics::collect_diagnostics;
 use crate::library_docs::{doc_for_name, library_doc_map};
-use crate::state::ServerState;
+use crate::state::{uri_to_path, ServerState};
 use tracing::{debug, warn};
 use trust_ide::goto_def::goto_definition as ide_goto_definition;
 use trust_ide::util::scope_at_position;
@@ -1037,7 +1037,7 @@ fn maybe_rename_pou_file(
         return None;
     }
 
-    let old_path = old_uri.to_file_path().ok()?;
+    let old_path = uri_to_path(&old_uri)?;
     let extension = old_path.extension().and_then(|ext| ext.to_str())?;
     let new_path = old_path.with_file_name(format!("{new_name}.{extension}"));
     if new_path == old_path || new_path.exists() {
@@ -1283,13 +1283,10 @@ pub fn document_link(state: &ServerState, params: DocumentLinkParams) -> Option<
     let doc = state.get_document(uri)?;
 
     let mut links = Vec::new();
-    let config_root = config_root_for_uri(state, uri).or_else(|| {
-        uri.to_file_path()
-            .ok()
-            .and_then(|path| path.parent().map(Path::to_path_buf))
-    });
+    let config_root = config_root_for_uri(state, uri)
+        .or_else(|| uri_to_path(uri).and_then(|path| path.parent().map(Path::to_path_buf)));
 
-    if let Ok(path) = uri.to_file_path() {
+    if let Some(path) = uri_to_path(uri) {
         if is_config_file(&path) {
             let root = config_root
                 .clone()
@@ -1678,11 +1675,7 @@ fn config_root_for_uri(state: &ServerState, uri: &Url) -> Option<PathBuf> {
     state
         .workspace_config_for_uri(uri)
         .map(|config| config.root)
-        .or_else(|| {
-            uri.to_file_path()
-                .ok()
-                .and_then(|path| path.parent().map(Path::to_path_buf))
-        })
+        .or_else(|| uri_to_path(uri).and_then(|path| path.parent().map(Path::to_path_buf)))
 }
 
 fn is_st_file(path: &Path) -> bool {

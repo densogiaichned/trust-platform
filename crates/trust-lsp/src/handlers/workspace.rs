@@ -20,7 +20,7 @@ use tracing::info;
 
 use crate::config::{ProjectConfig, CONFIG_FILES};
 use crate::index_cache::IndexCache;
-use crate::state::ServerState;
+use crate::state::{uri_to_path, ServerState};
 use trust_hir::db::SemanticDatabase;
 use trust_hir::symbols::{ScopeId, SymbolId, SymbolTable};
 use trust_hir::{is_reserved_keyword, is_valid_identifier, SymbolKind};
@@ -80,7 +80,7 @@ pub async fn index_workspace(client: &Client, state: &ServerState) {
     let mut seen = FxHashSet::default();
 
     for folder in folders {
-        let Ok(root) = folder.to_file_path() else {
+        let Some(root) = uri_to_path(&folder) else {
             continue;
         };
         let config = ProjectConfig::load(&root);
@@ -499,9 +499,7 @@ async fn start_progress(client: &Client, root_uri: &Url, total: usize) -> Option
         return None;
     }
 
-    let title = root_uri
-        .to_file_path()
-        .ok()
+    let title = uri_to_path(root_uri)
         .and_then(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
@@ -592,7 +590,7 @@ pub async fn did_change_watched_files(
     let mut cache_by_dir: HashMap<PathBuf, IndexCache> = HashMap::new();
     let mut dirty_cache_dirs: HashSet<PathBuf> = HashSet::new();
     for change in params.changes {
-        let Ok(path) = change.uri.to_file_path() else {
+        let Some(path) = uri_to_path(&change.uri) else {
             continue;
         };
         if is_config_file(&path) {

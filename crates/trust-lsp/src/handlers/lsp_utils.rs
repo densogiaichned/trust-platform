@@ -11,7 +11,7 @@ use trust_hir::SymbolKind as HirSymbolKind;
 use trust_hir::Type;
 use trust_ide::rename::RenameResult;
 
-use crate::state::ServerState;
+use crate::state::{uri_to_path, ServerState};
 
 pub(crate) fn offset_to_position(content: &str, offset: u32) -> Position {
     let (line, col) = offset_to_line_col(content, offset);
@@ -179,7 +179,7 @@ pub(crate) fn text_document_identifier_for_edit(
 }
 
 pub(crate) fn st_file_stem(uri: &Url) -> Option<String> {
-    let path = uri.to_file_path().ok()?;
+    let path = uri_to_path(uri)?;
     let extension = path.extension().and_then(|ext| ext.to_str())?;
     if !extension.eq_ignore_ascii_case("st") {
         return None;
