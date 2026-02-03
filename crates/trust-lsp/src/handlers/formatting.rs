@@ -544,7 +544,7 @@ fn expand_range_to_block(source: &str, start_line: usize, end_line: usize) -> (u
         if span.start_line <= start_line && span.end_line >= end_line {
             let span_len = span.end_line.saturating_sub(span.start_line);
             let best_len = best.map(|current| current.end_line.saturating_sub(current.start_line));
-            if best_len.map_or(true, |len| span_len < len) {
+            if best_len.is_none_or(|len| span_len < len) {
                 best = Some(span);
             }
         }
@@ -918,7 +918,7 @@ fn align_var_block_colons(
             }
             let mut updated = String::with_capacity(line.len() + pad);
             updated.push_str(&line[..colon_idx]);
-            updated.extend(std::iter::repeat(' ').take(pad));
+            updated.extend(std::iter::repeat_n(' ', pad));
             updated.push_str(&line[colon_idx..]);
             lines[idx] = updated;
         }

@@ -432,7 +432,7 @@ fn normalize_set(list: &[String]) -> FxHashSet<SmolStr> {
 fn allows_name(allowed: &Option<FxHashSet<SmolStr>>, name: &str) -> bool {
     allowed
         .as_ref()
-        .map_or(true, |set| set.contains(&normalize_name(name)))
+        .is_none_or(|set| set.contains(&normalize_name(name)))
 }
 
 /// Returns documentation for typed literals by prefix (case-insensitive).

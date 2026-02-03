@@ -547,7 +547,7 @@ fn is_terminal_type_name(name_node: &SyntaxNode) -> bool {
     for child in parent.children().filter(|n| n.kind() == SyntaxKind::Name) {
         last = Some(child);
     }
-    last.map_or(true, |node| node == *name_node)
+    last.is_none_or(|node| node == *name_node)
 }
 
 fn symbol_identity(

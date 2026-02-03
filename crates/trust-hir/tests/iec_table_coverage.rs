@@ -143,5 +143,5 @@ fn display_path(path: &Path, repo_root: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .to_string();
-    display.replace('\', "/")
+    display.replace('\\', "/")
 }

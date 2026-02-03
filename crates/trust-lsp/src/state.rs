@@ -264,7 +264,7 @@ impl ServerState {
                 let depth = root_path.components().count();
                 if best
                     .as_ref()
-                    .map_or(true, |(best_depth, _)| depth > *best_depth)
+                    .is_none_or(|(best_depth, _)| depth > *best_depth)
                 {
                     best = Some((depth, config.clone()));
                 }

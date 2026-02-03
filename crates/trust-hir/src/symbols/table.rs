@@ -321,7 +321,7 @@ impl SymbolTable {
         let name = name.into();
         let normalized = normalize_name(name.as_str());
         if let Some(existing) = self.type_names.get(&normalized).copied() {
-            let should_replace = self.types.get(&existing).map_or(true, is_placeholder_alias);
+            let should_replace = self.types.get(&existing).is_none_or(is_placeholder_alias);
             if should_replace {
                 self.types.insert(existing, ty);
             }

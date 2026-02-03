@@ -148,7 +148,7 @@ impl ModbusTcpDriver {
         payload.push((qty >> 8) as u8);
         payload.push(qty as u8);
         payload.push(byte_count as u8);
-        payload.extend(std::iter::repeat(0u8).take(byte_count));
+        payload.extend(std::iter::repeat_n(0u8, byte_count));
         payload[6..6 + data.len()].copy_from_slice(data);
         let response = self.send_request(&payload)?;
         if response.len() < 5 {
