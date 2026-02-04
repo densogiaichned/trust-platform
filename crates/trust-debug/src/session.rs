@@ -705,7 +705,8 @@ fn collect_sources(
 }
 
 fn source_key_for_path(path: &str) -> SourceKey {
-    SourceKey::from_path(Path::new(path))
+    let normalized = canonicalize_lossy(Path::new(path));
+    SourceKey::from_path(normalized)
 }
 
 fn resolve_root(options: &SourceOptions, entry_path: &Path) -> Result<PathBuf, CompileError> {
@@ -898,7 +899,48 @@ fn has_ignore_pragma(text: &str, pragmas: &[String]) -> bool {
 }
 
 fn canonicalize_lossy(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    #[cfg(windows)]
+    {
+        if let Ok(canon) = std::fs::canonicalize(path) {
+            return strip_windows_device_prefix(canon);
+        }
+        return strip_windows_device_prefix(path.to_path_buf());
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
+#[cfg(windows)]
+fn strip_windows_device_prefix(path: PathBuf) -> PathBuf {
+    let raw = match path.to_str() {
+        Some(raw) => raw,
+        None => return path,
+    };
+
+    if let Some(rest) = raw
+        .strip_prefix(r"\?\UNC\")
+        .or_else(|| raw.strip_prefix(r"\?\UNC\"))
+        .or_else(|| raw.strip_prefix(r"\\.\UNC\"))
+        .or_else(|| raw.strip_prefix(r"\??\UNC\"))
+    {
+        let mut unc = String::from(r"\\");
+        unc.push_str(rest);
+        return PathBuf::from(unc);
+    }
+
+    if let Some(rest) = raw
+        .strip_prefix(r"\?\")
+        .or_else(|| raw.strip_prefix(r"\?\"))
+        .or_else(|| raw.strip_prefix(r"\\.\"))
+        .or_else(|| raw.strip_prefix(r"\??\"))
+    {
+        return PathBuf::from(rest);
+    }
+
+    path
 }
 
 fn requested_breakpoints(args: &SetBreakpointsArguments) -> Vec<SourceBreakpoint> {
