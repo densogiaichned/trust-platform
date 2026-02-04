@@ -4,6 +4,7 @@
 //! open documents and the semantic database.
 
 use parking_lot::RwLock;
+use percent_encoding::percent_decode_str;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 use std::future::Future;
@@ -695,29 +696,36 @@ impl Default for ServerState {
     }
 }
 
-pub(crate) fn path_to_uri(path: &Path) -> Option<Url> {
-    if let Ok(url) = Url::from_file_path(path) {
-        return Some(url);
+#[cfg(windows)]
+fn normalize_windows_path_for_url(path: &Path) -> Option<PathBuf> {
+    let raw = path.to_str()?;
+    if let Some(rest) = raw.strip_prefix("\\?\\UNC\\") {
+        let mut unc = String::from(r"\\");
+        unc.push_str(rest);
+        return Some(PathBuf::from(unc));
     }
+    if let Some(rest) = raw.strip_prefix("\\?\\") {
+        return Some(PathBuf::from(rest));
+    }
+    None
+}
 
+pub(crate) fn path_to_uri(path: &Path) -> Option<Url> {
     #[cfg(windows)]
     {
-        if let Some(raw) = path.to_str() {
-            if let Some(rest) = raw.strip_prefix("\\?\\UNC\\") {
-                let unc = rest.replace('\\', "/");
-                return Url::parse(&format!("file://{unc}")).ok();
-            }
-            if let Some(rest) = raw.strip_prefix("\\?\\") {
-                let stripped = PathBuf::from(rest);
-                if let Ok(url) = Url::from_file_path(&stripped) {
-                    return Some(url);
-                }
+        if let Some(normalized) = normalize_windows_path_for_url(path) {
+            if let Ok(url) = Url::from_file_path(&normalized) {
+                return Some(url);
             }
         }
     }
 
+    if let Ok(url) = Url::from_file_path(path) {
+        return Some(url);
+    }
+
     let raw_str = path.to_string_lossy();
-    if !path.is_absolute() && !raw_str.starts_with("/") {
+    if !path.is_absolute() && !raw_str.starts_with('/') {
         return None;
     }
     let mut raw = raw_str.replace('\\', "/");
@@ -731,7 +739,7 @@ pub(crate) fn path_to_uri(path: &Path) -> Option<Url> {
         }
     }
 
-    if !raw.starts_with("/") {
+    if !raw.starts_with('/') {
         raw = format!("/{raw}");
     }
     Url::parse(&format!("file://{raw}")).ok()
@@ -742,11 +750,32 @@ pub(crate) fn uri_to_path(uri: &Url) -> Option<PathBuf> {
         return Some(path);
     }
     if uri.scheme() == "file" {
-        let path = uri.path();
-        if path.is_empty() {
+        let raw_path = uri.path();
+        if raw_path.is_empty() {
             return None;
         }
-        return Some(PathBuf::from(path));
+        let decoded = percent_decode_str(raw_path).decode_utf8_lossy();
+
+        #[cfg(windows)]
+        {
+            if let Some(stripped) = decoded.strip_prefix('/') {
+                if stripped.len() >= 2 && stripped.as_bytes()[1] == b':' {
+                    return Some(PathBuf::from(stripped));
+                }
+            }
+            if let Some(host) = uri.host_str() {
+                let host = percent_decode_str(host).decode_utf8_lossy();
+                let mut unc = String::from(r"\\");
+                unc.push_str(&host);
+                if let Some(path) = decoded.strip_prefix('/') {
+                    unc.push('\\');
+                    unc.push_str(&path.replace('/', "\\"));
+                }
+                return Some(PathBuf::from(unc));
+            }
+        }
+
+        return Some(PathBuf::from(decoded.as_ref()));
     }
     None
 }
@@ -898,5 +927,25 @@ evict_to_percent = 75
         );
 
         fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn uri_to_path_decodes_drive_letter() {
+        let uri = Url::parse("file:///c%3A/1.Work/projects/test.st").unwrap();
+        let path = uri_to_path(&uri).expect("decoded path");
+        let lower = path.to_string_lossy().to_lowercase();
+        assert!(lower.starts_with("c:"));
+        assert!(lower.contains("1.work"));
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn path_to_uri_strips_extended_length_prefix() {
+        let path = PathBuf::from(r"\?\C:\1.Work\projects\test.st");
+        let uri = path_to_uri(&path).expect("uri");
+        let uri_str = uri.as_str();
+        assert!(!uri_str.contains("%3F"), "uri should not include ? host");
+        assert!(uri_str.contains("c:/") || uri_str.contains("C:/"));
     }
 }
