@@ -699,12 +699,18 @@ impl Default for ServerState {
 #[cfg(windows)]
 fn normalize_windows_path_for_url(path: &Path) -> Option<PathBuf> {
     let raw = path.to_str()?;
-    if let Some(rest) = raw.strip_prefix("\\?\\UNC\\") {
+    if let Some(rest) = raw
+        .strip_prefix(r"\\?\UNC\")
+        .or_else(|| raw.strip_prefix(r"\?\UNC\"))
+    {
         let mut unc = String::from(r"\\");
         unc.push_str(rest);
         return Some(PathBuf::from(unc));
     }
-    if let Some(rest) = raw.strip_prefix("\\?\\") {
+    if let Some(rest) = raw
+        .strip_prefix(r"\\?\")
+        .or_else(|| raw.strip_prefix(r"\?\"))
+    {
         return Some(PathBuf::from(rest));
     }
     None
@@ -717,6 +723,7 @@ pub(crate) fn path_to_uri(path: &Path) -> Option<Url> {
             if let Ok(url) = Url::from_file_path(&normalized) {
                 return Some(url);
             }
+            return path_to_uri(&normalized);
         }
     }
 
@@ -732,10 +739,17 @@ pub(crate) fn path_to_uri(path: &Path) -> Option<Url> {
 
     #[cfg(windows)]
     {
-        if raw.starts_with("//?/UNC/") {
-            raw = format!("//{}", raw.trim_start_matches("//?/UNC/"));
-        } else if raw.starts_with("//?/") {
-            raw = raw.trim_start_matches("//?/").to_string();
+        if raw.starts_with("//?/UNC/") || raw.starts_with("/?/UNC/") {
+            raw = format!(
+                "//{}",
+                raw.trim_start_matches("//?/UNC/")
+                    .trim_start_matches("/?/UNC/")
+            );
+        } else if raw.starts_with("//?/") || raw.starts_with("/?/") {
+            raw = raw
+                .trim_start_matches("//?/")
+                .trim_start_matches("/?/")
+                .to_string();
         }
     }
 
@@ -942,7 +956,7 @@ evict_to_percent = 75
     #[test]
     #[cfg(windows)]
     fn path_to_uri_strips_extended_length_prefix() {
-        let path = PathBuf::from(r"\?\C:\1.Work\projects\test.st");
+        let path = PathBuf::from(r"\\?\C:\1.Work\projects\test.st");
         let uri = path_to_uri(&path).expect("uri");
         let uri_str = uri.as_str();
         assert!(!uri_str.contains("%3F"), "uri should not include ? host");
