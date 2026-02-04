@@ -278,16 +278,52 @@ impl LanguageServer for StLanguageServer {
                     workspace_folders: None,
                     file_operations: Some(WorkspaceFileOperationsServerCapabilities {
                         will_rename: Some(FileOperationRegistrationOptions {
-                            filters: vec![FileOperationFilter {
-                                scheme: Some("file".to_string()),
-                                pattern: FileOperationPattern {
-                                    glob: "**/*.st".to_string(),
-                                    matches: Some(FileOperationPatternKind::File),
-                                    options: Some(FileOperationPatternOptions {
-                                        ignore_case: Some(true),
-                                    }),
+                            filters: vec![
+                                FileOperationFilter {
+                                    scheme: Some("file".to_string()),
+                                    pattern: FileOperationPattern {
+                                        glob: "**/*.st".to_string(),
+                                        matches: Some(FileOperationPatternKind::File),
+                                        options: Some(FileOperationPatternOptions {
+                                            ignore_case: Some(true),
+                                        }),
+                                    },
                                 },
-                            }],
+                                FileOperationFilter {
+                                    scheme: Some("file".to_string()),
+                                    pattern: FileOperationPattern {
+                                        glob: "**/*.pou".to_string(),
+                                        matches: Some(FileOperationPatternKind::File),
+                                        options: Some(FileOperationPatternOptions {
+                                            ignore_case: Some(true),
+                                        }),
+                                    },
+                                },
+                            ],
+                        }),
+                        did_rename: Some(FileOperationRegistrationOptions {
+                            filters: vec![
+                                FileOperationFilter {
+                                    scheme: Some("file".to_string()),
+                                    pattern: FileOperationPattern {
+                                        glob: "**/*.st".to_string(),
+                                        matches: Some(FileOperationPatternKind::File),
+                                        options: Some(FileOperationPatternOptions {
+                                            ignore_case: Some(true),
+                                        }),
+                                    },
+                                },
+                                FileOperationFilter {
+                                    scheme: Some("file".to_string()),
+                                    pattern: FileOperationPattern {
+                                        glob: "**/*.pou".to_string(),
+                                        matches: Some(FileOperationPatternKind::File),
+                                        options: Some(FileOperationPatternOptions {
+                                            ignore_case: Some(true),
+                                        }),
+                                    },
+                                },
+                            ],
                         }),
                         ..Default::default()
                     }),
@@ -352,6 +388,10 @@ impl LanguageServer for StLanguageServer {
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
         handlers::did_change_watched_files(&self.client, &self.state, params).await;
+    }
+
+    async fn did_rename_files(&self, params: RenameFilesParams) {
+        handlers::did_rename_files(&self.client, &self.state, params).await;
     }
 
     async fn diagnostic(

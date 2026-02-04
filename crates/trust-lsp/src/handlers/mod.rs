@@ -30,8 +30,9 @@ pub use formatting::{formatting, on_type_formatting, range_formatting};
 pub use refresh::{refresh_diagnostics, refresh_semantic_tokens};
 pub use sync::{did_change, did_close, did_open, did_save};
 pub use workspace::{
-    did_change_configuration, did_change_watched_files, index_workspace_background_with_refresh,
-    register_file_watchers, register_type_hierarchy, will_rename_files,
+    did_change_configuration, did_change_watched_files, did_rename_files,
+    index_workspace_background_with_refresh, register_file_watchers, register_type_hierarchy,
+    will_rename_files,
 };
 
 #[cfg(test)]
