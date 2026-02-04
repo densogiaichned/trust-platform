@@ -3,9 +3,30 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 [![Rust Version](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 
+truST Platform is an IEC 61131-3 Structured Text toolchain: a VS Code extension, language server, runtime, and debugger.
+Shipped binaries keep stable names: `trust-lsp`, `trust-runtime`, `trust-debug`, and `trust-bundle-gen`.
 
-truST Platform is an IEC 61131-3 Structured Text tooling suite: a language server, runtime, debugger, and VS Code extension.
-The repo is `trust-platform`; shipped binaries keep stable names: `trust-lsp`, `trust-runtime`, `trust-debug`, and `trust-bundle-gen`.
+## Quick Start (VS Code)
+
+1. Install **truST LSP** from the Marketplace.
+2. Open a folder containing `.st` or `.pou` files.
+3. Start editing — the extension auto-starts the bundled `trust-lsp`/`trust-debug` binaries.
+4. (Optional) Add a `trust-lsp.toml` at the workspace root for project settings.
+
+Command line install:
+
+```bash
+code --install-extension trust-platform.trust-lsp
+```
+
+## Best Features
+
+- IEC 61131-3-aware diagnostics with spec references.
+- Semantic tokens, formatting, and smart code actions.
+- Refactors like **Move Namespace** and rename that updates file names.
+- Go to definition/references, call hierarchy, type hierarchy, and workspace symbols.
+- Inline values and I/O panel driven by the runtime control endpoint.
+- DAP debugging with breakpoints, stepping, and variables.
 
 ## Components
 
@@ -21,58 +42,46 @@ The repo is `trust-platform`; shipped binaries keep stable names: `trust-lsp`, `
 
 ![truST system architecture](docs/diagrams/generated/system-architecture.svg)
 
+## Runtime + Debugger (Optional)
 
-## Install
-
-### VS Code (Marketplace)
-
-1. Open VS Code.
-2. Go to Extensions.
-3. Search for **truST LSP**.
-4. Click Install.
-
-You can also install from the command line:
+- Download pre-built binaries from GitHub Releases, or build from source.
+- Start the runtime:
 
 ```bash
-code --install-extension trust-lsp.trust-lsp
+trust-runtime --project /path/to/project
 ```
 
-### Pre-built binaries (GitHub Releases)
+- Ensure `trust-debug` is available on your PATH (or set `trust-lsp.debug.adapter.path`).
+- In VS Code, run **Structured Text: Start Debugging** or **Attach Debugger**.
 
-Download platform-specific binaries from the GitHub Releases page for this repo.
+## Configuration (trust-lsp.toml)
 
-## Quick Start
+Put `trust-lsp.toml` at the workspace root to configure indexing and runtime integration.
 
-### Build From Source
+```toml
+[project]
+include_paths = ["libs"]
+vendor_profile = "codesys"
+
+[runtime]
+# Required for inline values via the runtime control endpoint.
+control_endpoint = "unix:///tmp/trust-runtime.sock"
+# Optional auth token (matches runtime control settings).
+control_auth_token = "optional-token"
+```
+
+Inline values also work by setting the runtime endpoint from the VS Code **Structured Text Runtime** panel
+(gear icon → Runtime Settings) without editing `trust-lsp.toml`.
+
+## Build From Source (Developer)
 
 ```bash
-# Clone the repository
-git clone <repo-url>
+git clone https://github.com/johannesPettersson80/trust-platform
 cd trust-platform
-
-# Build in release mode
 cargo build --release
-
-# Binaries will be in target/release/
-# trust-lsp, trust-runtime, trust-debug, trust-bundle-gen
 ```
 
-### Run the Language Server
-
-```bash
-cargo run --release --bin trust-lsp
-```
-
-### VS Code Extension
-
-The extension lives in `editors/vscode` (Marketplace publishing in progress). See
-`editors/vscode/README.md` for setup and debug instructions.
-
-## Configuration
-
-Most projects use `trust-lsp.toml` at the workspace root. Runtime inline values can also be configured
-from the VS Code **Structured Text Runtime** panel (gear icon → Runtime Settings).
-See `docs/README.md` for a minimal configuration example.
+Binaries are in `target/release/`.
 
 ## Documentation
 
@@ -82,9 +91,8 @@ See `docs/README.md` for a minimal configuration example.
 
 ## Status
 
-- VS Code Marketplace publishing is in progress.
-- Runtime and debugger are experimental but integrated in the platform workflow.
-
+- VS Code Marketplace: live
+- Runtime and debugger: experimental, integrated in the platform workflow
 
 ## Getting Help
 

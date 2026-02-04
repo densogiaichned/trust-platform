@@ -2,6 +2,22 @@
 
 VS Code client for the truST LSP language server (`trust-lsp`) (IEC 61131-3 Structured Text).
 
+## Quick Start (Users)
+
+1. Install **truST LSP** from the Marketplace.
+2. Open a folder with `.st` or `.pou` files.
+3. Start editing — the extension auto-starts bundled `trust-lsp`/`trust-debug` binaries.
+4. (Optional) Add `trust-lsp.toml` or set the runtime endpoint in the **Structured Text Runtime** panel.
+
+## Best Features
+
+- IEC 61131-3-aware diagnostics with spec references.
+- Semantic tokens, formatting, and smart code actions.
+- Refactor command **Structured Text: Move Namespace**.
+- Rename that updates file names and references.
+- Inline values + runtime I/O panel.
+- DAP debugging with breakpoints, stepping, and variables.
+
 ## Install
 
 ### Marketplace
@@ -14,7 +30,7 @@ VS Code client for the truST LSP language server (`trust-lsp`) (IEC 61131-3 Stru
 Or from the command line:
 
 ```bash
-code --install-extension trust-lsp.trust-lsp
+code --install-extension trust-platform.trust-lsp
 ```
 
 
