@@ -602,6 +602,18 @@ pub async fn did_rename_files(
             config_changed = true;
         }
 
+        let mut renamed_open_doc = false;
+        let mut open_content: Option<String> = None;
+        if let (Some(old_uri), Some(new_uri)) = (old_uri.as_ref(), new_uri.as_ref()) {
+            if let Some(doc) = state.get_document(old_uri) {
+                if doc.is_open {
+                    renamed_open_doc = true;
+                    open_content = Some(doc.content.clone());
+                    let _ = state.rename_document(old_uri, new_uri);
+                }
+            }
+        }
+
         if let (Some(old_uri), Some(path)) = (old_uri.as_ref(), old_path.as_ref()) {
             if is_st_file(path) {
                 let cache_dir = state
@@ -614,7 +626,7 @@ pub async fn did_rename_files(
                     cache.remove_path(path);
                     dirty_cache_dirs.insert(dir);
                 }
-                if state.remove_document(old_uri).is_some() {
+                if !renamed_open_doc && state.remove_document(old_uri).is_some() {
                     removed += 1;
                 }
             }
@@ -625,8 +637,13 @@ pub async fn did_rename_files(
                 let cache_dir = state
                     .workspace_config_for_uri(new_uri)
                     .and_then(|config| config.index_cache_dir());
-                let Ok(content) = std::fs::read_to_string(path) else {
-                    continue;
+                let content = if let Some(content) = open_content.clone() {
+                    content
+                } else {
+                    let Ok(content) = std::fs::read_to_string(path) else {
+                        continue;
+                    };
+                    content
                 };
                 if let Some(dir) = cache_dir.clone() {
                     let cache = cache_by_dir
@@ -635,10 +652,14 @@ pub async fn did_rename_files(
                     cache.update_from_content(path, content.clone());
                     dirty_cache_dirs.insert(dir);
                 }
-                if state.index_document(new_uri.clone(), content).is_some() {
+                if !renamed_open_doc && state.index_document(new_uri.clone(), content).is_some() {
                     indexed += 1;
                 }
             }
+        }
+
+        if renamed_open_doc {
+            indexed = indexed.saturating_add(1);
         }
     }
 

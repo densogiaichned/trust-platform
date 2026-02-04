@@ -434,6 +434,26 @@ impl ServerState {
         Some(doc.file_id)
     }
 
+    /// Renames a document while preserving its open state and content.
+    pub fn rename_document(&self, old_uri: &Url, new_uri: &Url) -> Option<FileId> {
+        let mut docs = self.documents.write();
+        let mut doc = docs.remove(old_uri)?;
+        self.semantic_tokens.write().remove(old_uri);
+        self.diagnostics.write().remove(old_uri);
+
+        let old_key = source_key_for_uri(old_uri);
+        let new_key = source_key_for_uri(new_uri);
+        let mut project = self.project.write();
+        project.remove_source(&old_key);
+        project.remove_source(&new_key);
+        let file_id = project.set_source_text(new_key, doc.content.clone());
+
+        doc.uri = new_uri.clone();
+        doc.file_id = file_id;
+        docs.insert(new_uri.clone(), doc);
+        Some(file_id)
+    }
+
     /// Gets a document by URI.
     pub fn get_document(&self, uri: &Url) -> Option<Document> {
         self.documents.read().get(uri).cloned()
