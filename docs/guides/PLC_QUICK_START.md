@@ -56,6 +56,17 @@ sudo trust-runtime setup
 
 Then re‑run `trust-runtime --project .`.
 
+## Optional: VS Code Runtime Panel
+
+If you use the VS Code extension, the **Structured Text Runtime** panel has two modes:
+
+- **Local**: starts a local runtime for quick testing and debugging.
+- **External**: connects to a running runtime via its control endpoint.
+
+External mode is for real devices (PLC or remote runtime). Local mode is for development only.
+
+Set the External runtime control endpoint in `trust-lsp.toml` or in VS Code (Runtime panel → gear icon).
+
 ## Troubleshooting
 
 - **Missing runtime.toml / io.toml / program.stbc**  

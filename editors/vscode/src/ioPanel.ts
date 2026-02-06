@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as net from "net";
 
 const DEBUG_TYPE = "structured-text";
 
@@ -41,7 +42,180 @@ type RuntimeSourceOptions = {
   runtimeRoot?: string;
 };
 
+type RuntimeStatusPayload = {
+  running: boolean;
+  inlineValuesEnabled: boolean;
+  runtimeMode: "simulate" | "online";
+  runtimeState: "running" | "connected" | "stopped";
+  endpoint: string;
+  endpointConfigured: boolean;
+  endpointEnabled: boolean;
+  endpointReachable: boolean;
+};
+
 const PRAGMA_SCAN_LINES = 20;
+const ENDPOINT_PROBE_TTL_MS = 2000;
+const ENDPOINT_PROBE_TIMEOUT_MS = 400;
+
+type ParsedEndpoint =
+  | { kind: "tcp"; host: string; port: number }
+  | { kind: "unix"; path: string };
+
+let endpointProbeCache:
+  | { endpoint: string; reachable: boolean; checkedAt: number }
+  | undefined;
+
+const structuredTextSessions = new Map<string, vscode.DebugSession>();
+
+function structuredTextSessionKey(session: vscode.DebugSession): string {
+  return session.id ?? session.name;
+}
+
+function trackStructuredTextSession(session: vscode.DebugSession): void {
+  structuredTextSessions.set(structuredTextSessionKey(session), session);
+}
+
+function untrackStructuredTextSession(session: vscode.DebugSession): void {
+  structuredTextSessions.delete(structuredTextSessionKey(session));
+}
+
+function getStructuredTextSession(): vscode.DebugSession | undefined {
+  const active = vscode.debug.activeDebugSession;
+  if (active && active.type === DEBUG_TYPE) {
+    return active;
+  }
+  for (const session of structuredTextSessions.values()) {
+    return session;
+  }
+  return undefined;
+}
+
+
+function parseControlEndpoint(endpoint: string): ParsedEndpoint | undefined {
+  if (endpoint.startsWith("tcp://")) {
+    try {
+      const url = new URL(endpoint);
+      const port = Number(url.port);
+      if (!url.hostname || !Number.isFinite(port)) {
+        return undefined;
+      }
+      return { kind: "tcp", host: url.hostname, port };
+    } catch {
+      return undefined;
+    }
+  }
+  if (endpoint.startsWith("unix://")) {
+    if (process.platform === "win32") {
+      return undefined;
+    }
+    const path = endpoint.slice("unix://".length);
+    if (!path) {
+      return undefined;
+    }
+    return { kind: "unix", path };
+  }
+  return undefined;
+}
+
+function isLocalEndpoint(endpoint: string): boolean {
+  const parsed = parseControlEndpoint(endpoint);
+  if (!parsed) {
+    return false;
+  }
+  if (parsed.kind === "unix") {
+    return true;
+  }
+  const host = parsed.host.toLowerCase();
+  return host === "127.0.0.1" || host === "localhost" || host === "::1";
+}
+
+async function probeEndpointReachable(endpoint: string): Promise<boolean> {
+  const now = Date.now();
+  if (
+    endpointProbeCache &&
+    endpointProbeCache.endpoint === endpoint &&
+    now - endpointProbeCache.checkedAt < ENDPOINT_PROBE_TTL_MS
+  ) {
+    return endpointProbeCache.reachable;
+  }
+  const parsed = parseControlEndpoint(endpoint);
+  if (!parsed) {
+    endpointProbeCache = { endpoint, reachable: false, checkedAt: now };
+    return false;
+  }
+  const reachable = await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const socket =
+      parsed.kind === "tcp"
+        ? net.createConnection({ host: parsed.host, port: parsed.port })
+        : net.createConnection({ path: parsed.path });
+    const finish = (value: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.setTimeout(ENDPOINT_PROBE_TIMEOUT_MS, () => finish(false));
+    socket.once("error", () => finish(false));
+    socket.once("connect", () => finish(true));
+  });
+  endpointProbeCache = { endpoint, reachable, checkedAt: Date.now() };
+  return reachable;
+}
+
+async function fetchRuntimeState(endpoint: string, authToken?: string): Promise<"running" | "stopped" | undefined> {
+  const parsed = parseControlEndpoint(endpoint);
+  if (!parsed) {
+    return undefined;
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    let buffer = "";
+    const socket =
+      parsed.kind === "tcp"
+        ? net.createConnection({ host: parsed.host, port: parsed.port })
+        : net.createConnection({ path: parsed.path });
+    const finish = (value: "running" | "stopped" | undefined) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      resolve(value);
+    };
+    socket.setTimeout(ENDPOINT_PROBE_TIMEOUT_MS, () => finish(undefined));
+    socket.once("error", () => finish(undefined));
+    socket.once("connect", () => {
+      const request = { id: 1, type: "status", auth: authToken || undefined };
+      socket.write(JSON.stringify(request) + "\n");
+    });
+    socket.on("data", (chunk: Buffer | string) => {
+      buffer += chunk.toString();
+      const idx = buffer.indexOf("\n");
+      if (idx == -1) {
+        return;
+      }
+      const line = buffer.slice(0, idx).trim();
+      if (!line) {
+        finish(undefined);
+        return;
+      }
+      try {
+        const response = JSON.parse(line) as { ok?: boolean; result?: { state?: string } };
+        if (response.ok && response.result && typeof response.result.state === "string") {
+          const state = response.result.state.toLowerCase();
+          finish(state === "running" ? "running" : "stopped");
+          return;
+        }
+      } catch {
+        // ignore parse errors
+      }
+      finish(undefined);
+    });
+  });
+}
 
 let panel: vscode.WebviewPanel | undefined;
 
@@ -51,6 +225,11 @@ export function registerIoPanel(context: vscode.ExtensionContext): void {
       showPanel(context);
     })
   );
+
+  const activeSession = vscode.debug.activeDebugSession;
+  if (activeSession && activeSession.type === DEBUG_TYPE) {
+    trackStructuredTextSession(activeSession);
+  }
 
   context.subscriptions.push(
     vscode.debug.onDidReceiveDebugSessionCustomEvent((event) => {
@@ -74,18 +253,59 @@ export function registerIoPanel(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.debug.onDidChangeActiveDebugSession(() => {
+    vscode.debug.onDidStartDebugSession((session) => {
+      if (session.type !== DEBUG_TYPE) {
+        return;
+      }
+      trackStructuredTextSession(session);
+      void requestIoState();
+      void sendRuntimeStatus();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.debug.onDidTerminateDebugSession((session) => {
+      if (session.type !== DEBUG_TYPE) {
+        return;
+      }
+      untrackStructuredTextSession(session);
+      void sendRuntimeStatus();
+    })
+  );
+
+
+  context.subscriptions.push(
+    vscode.debug.onDidChangeActiveDebugSession((session) => {
       if (panel) {
         void requestIoState();
       }
+      if (session && session.type === DEBUG_TYPE) {
+        trackStructuredTextSession(session);
+      }
+      void sendRuntimeStatus();
     })
   );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (
+        event.affectsConfiguration("trust-lsp.runtime.controlEndpoint") ||
+        event.affectsConfiguration("trust-lsp.runtime.controlEndpointEnabled") ||
+        event.affectsConfiguration("trust-lsp.runtime.inlineValuesEnabled") ||
+        event.affectsConfiguration("trust-lsp.runtime.mode")
+      ) {
+        void sendRuntimeStatus();
+      }
+    })
+  );
+
 }
 
 function showPanel(context: vscode.ExtensionContext): void {
   if (panel) {
     panel.reveal();
     void requestIoState();
+    void sendRuntimeStatus();
     return;
   }
 
@@ -130,6 +350,15 @@ function showPanel(context: vscode.ExtensionContext): void {
     if (message?.type === "compileAndStart") {
       void compileActiveProgram({ startDebugAfter: true });
     }
+    if (message?.type === "stopDebug") {
+      void stopDebugging();
+    }
+    if (message?.type === "runtimeStart") {
+      void handleRuntimePrimary();
+    }
+    if (message?.type === "runtimeSetMode") {
+      void setRuntimeMode(message.mode);
+    }
     if (message?.type === "requestSettings") {
       panel?.webview.postMessage({
         type: "settings",
@@ -150,10 +379,12 @@ function showPanel(context: vscode.ExtensionContext): void {
     }
     if (message?.type === "webviewReady") {
       console.info("Runtime panel webview ready.");
+      void sendRuntimeStatus();
     }
   });
 
   void requestIoState();
+  void sendRuntimeStatus();
 
   context.subscriptions.push(panel);
 }
@@ -169,6 +400,7 @@ type SettingsPayload = {
   runtimeIncludeGlobs?: string[];
   runtimeExcludeGlobs?: string[];
   runtimeIgnorePragmas?: string[];
+  runtimeInlineValuesEnabled?: boolean;
 };
 
 function collectSettingsSnapshot(): SettingsPayload {
@@ -184,6 +416,8 @@ function collectSettingsSnapshot(): SettingsPayload {
     runtimeIncludeGlobs: config.get<string[]>("runtime.includeGlobs") ?? [],
     runtimeExcludeGlobs: config.get<string[]>("runtime.excludeGlobs") ?? [],
     runtimeIgnorePragmas: config.get<string[]>("runtime.ignorePragmas") ?? [],
+    runtimeInlineValuesEnabled:
+      config.get<boolean>("runtime.inlineValuesEnabled") ?? true,
   };
 }
 
@@ -217,9 +451,10 @@ async function applySettingsUpdate(payload: SettingsPayload | undefined): Promis
     payload.debugAdapterEnv ?? {},
     vscode.ConfigurationTarget.Workspace
   );
+  const runtimeControlEndpoint = payload.runtimeControlEndpoint?.trim() || undefined;
   await config.update(
     "runtime.controlEndpoint",
-    payload.runtimeControlEndpoint?.trim() || undefined,
+    runtimeControlEndpoint || undefined,
     vscode.ConfigurationTarget.Workspace
   );
   await config.update(
@@ -242,6 +477,12 @@ async function applySettingsUpdate(payload: SettingsPayload | undefined): Promis
     payload.runtimeIgnorePragmas ?? [],
     vscode.ConfigurationTarget.Workspace
   );
+  await config.update(
+    "runtime.inlineValuesEnabled",
+    payload.runtimeInlineValuesEnabled ?? true,
+    vscode.ConfigurationTarget.Workspace
+  );
+
 
   panel?.webview.postMessage({
     type: "status",
@@ -249,9 +490,88 @@ async function applySettingsUpdate(payload: SettingsPayload | undefined): Promis
   });
 }
 
+function runtimeConfigTarget(): vscode.Uri | undefined {
+  const activeSession = getStructuredTextSession();
+  if (activeSession?.workspaceFolder) {
+    return activeSession.workspaceFolder.uri;
+  }
+  const editor = vscode.window.activeTextEditor;
+  if (editor) {
+    const folder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+    if (folder) {
+      return folder.uri;
+    }
+  }
+  return vscode.workspace.workspaceFolders?.[0]?.uri;
+}
+
+function runtimeConfigScope(target: vscode.Uri | undefined): vscode.ConfigurationTarget {
+  return target ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace;
+}
+
+async function runtimeStatusPayload(): Promise<RuntimeStatusPayload> {
+  const target = runtimeConfigTarget();
+  const config = vscode.workspace.getConfiguration("trust-lsp", target);
+  const endpoint = (config.get<string>("runtime.controlEndpoint") ?? "").trim();
+  const authToken = (config.get<string>("runtime.controlAuthToken") ?? "").trim();
+  const endpointConfigured = endpoint.length > 0;
+  const endpointEnabled = config.get<boolean>(
+    "runtime.controlEndpointEnabled",
+    true
+  );
+  const inlineValuesEnabled = config.get<boolean>(
+    "runtime.inlineValuesEnabled",
+    true
+  );
+  const runtimeMode = config.get<"simulate" | "online">(
+    "runtime.mode",
+    "simulate"
+  );
+  const session = getStructuredTextSession();
+  const running = !!session;
+  let runtimeState: RuntimeStatusPayload["runtimeState"] = "stopped";
+  let endpointReachable = false;
+
+  if (running) {
+    const request = session?.configuration?.request;
+    runtimeState = request === "attach" ? "connected" : "running";
+  }
+  if (!running && runtimeMode === "online" && endpointConfigured && endpointEnabled) {
+    endpointReachable = await probeEndpointReachable(endpoint);
+    if (endpointReachable) {
+      const state = await fetchRuntimeState(endpoint, authToken || undefined);
+      if (state) {
+        runtimeState = state;
+      }
+    }
+  }
+
+  return {
+    running,
+    inlineValuesEnabled,
+    runtimeMode,
+    runtimeState,
+    endpoint,
+    endpointConfigured,
+    endpointEnabled,
+    endpointReachable,
+  };
+}
+
+async function sendRuntimeStatus(): Promise<void> {
+  if (!panel) {
+    return;
+  }
+  const payload = await runtimeStatusPayload();
+  panel.webview.postMessage({
+    type: "runtimeStatus",
+    payload,
+  });
+}
+
 async function requestIoState(): Promise<void> {
-  const session = vscode.debug.activeDebugSession;
-  if (!session || session.type !== DEBUG_TYPE) {
+  const session = getStructuredTextSession();
+  if (!session) {
     panel?.webview.postMessage({
       type: "status",
       payload: "No active Structured Text debug session.",
@@ -271,8 +591,8 @@ async function requestIoState(): Promise<void> {
 }
 
 async function writeInput(address: string, value: string): Promise<void> {
-  const session = vscode.debug.activeDebugSession;
-  if (!session || session.type !== DEBUG_TYPE) {
+  const session = getStructuredTextSession();
+  if (!session) {
     panel?.webview.postMessage({
       type: "status",
       payload: "No active Structured Text debug session.",
@@ -303,8 +623,8 @@ async function writeInput(address: string, value: string): Promise<void> {
 }
 
 async function forceInput(address: string, value: string): Promise<void> {
-  const session = vscode.debug.activeDebugSession;
-  if (!session || session.type !== DEBUG_TYPE) {
+  const session = getStructuredTextSession();
+  if (!session) {
     panel?.webview.postMessage({
       type: "status",
       payload: "No active Structured Text debug session.",
@@ -338,8 +658,8 @@ async function forceInput(address: string, value: string): Promise<void> {
 }
 
 async function releaseInput(address: string): Promise<void> {
-  const session = vscode.debug.activeDebugSession;
-  if (!session || session.type !== DEBUG_TYPE) {
+  const session = getStructuredTextSession();
+  if (!session) {
     panel?.webview.postMessage({
       type: "status",
       payload: "No active Structured Text debug session.",
@@ -372,6 +692,27 @@ async function releaseInput(address: string): Promise<void> {
   }
 }
 
+
+async function stopDebugging(): Promise<void> {
+  const session = getStructuredTextSession();
+  if (!session) {
+    panel?.webview.postMessage({
+      type: "status",
+      payload: "No active Structured Text debug session.",
+    });
+    return;
+  }
+  try {
+    await vscode.debug.stopDebugging(session);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    panel?.webview.postMessage({
+      type: "status",
+      payload: `Stop debugging failed: ${message}`,
+    });
+  }
+}
+
 async function startDebugging(programOverride?: string): Promise<void> {
   try {
     await vscode.commands.executeCommand(
@@ -384,6 +725,129 @@ async function startDebugging(programOverride?: string): Promise<void> {
       type: "status",
       payload: `Start debugging failed: ${message}`,
     });
+  }
+}
+
+async function startAttachDebugging(
+  endpoint: string,
+  authToken?: string
+): Promise<boolean> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  const runtimeOptions = runtimeSourceOptions();
+  const config: vscode.DebugConfiguration = {
+    type: DEBUG_TYPE,
+    request: "attach",
+    name: "Attach Structured Text",
+    endpoint,
+    authToken,
+    ...runtimeOptions,
+  };
+  if (folder) {
+    config.cwd = folder.uri.fsPath;
+  }
+  try {
+    const started = await vscode.debug.startDebugging(folder, config);
+    if (!started) {
+      panel?.webview.postMessage({
+        type: "status",
+        payload: "Attach failed to start.",
+      });
+    }
+    return started;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    panel?.webview.postMessage({
+      type: "status",
+      payload: `Attach failed: ${message}`,
+    });
+    return false;
+  }
+}
+
+
+async function setRuntimeMode(mode: unknown): Promise<void> {
+  const normalized = mode === "online" ? "online" : "simulate";
+  const target = runtimeConfigTarget();
+  const config = vscode.workspace.getConfiguration("trust-lsp", target);
+  await config.update("runtime.mode", normalized, runtimeConfigScope(target));
+  void sendRuntimeStatus();
+}
+
+
+
+async function handleRuntimePrimary(): Promise<void> {
+  const status = await runtimeStatusPayload();
+  if (status.running || status.runtimeState === "connected") {
+    await handleRuntimeStop();
+    return;
+  }
+  await handleRuntimeStart();
+}
+
+async function handleRuntimeStart(): Promise<void> {
+  const status = await runtimeStatusPayload();
+  const target = runtimeConfigTarget();
+  const config = vscode.workspace.getConfiguration("trust-lsp", target);
+  const mode = config.get<"simulate" | "online">(
+    "runtime.mode",
+    "simulate"
+  );
+
+  if (mode === "simulate") {
+    await compileActiveProgram({ startDebugAfter: true });
+    return;
+  }
+
+  const endpoint = status.endpoint;
+  if (!status.endpointConfigured) {
+    panel?.webview.postMessage({
+      type: "status",
+      payload: "Runtime endpoint not set.",
+    });
+    void sendRuntimeStatus();
+    return;
+  }
+
+  if (!status.endpointEnabled) {
+    await config.update(
+      "runtime.controlEndpointEnabled",
+      true,
+      runtimeConfigScope(target)
+    );
+  }
+
+  const reachable = await probeEndpointReachable(endpoint);
+  if (reachable) {
+    const authToken = config.get<string>("runtime.controlAuthToken") ?? "";
+    await startAttachDebugging(endpoint, authToken || undefined);
+    void sendRuntimeStatus();
+    return;
+  }
+
+
+  panel?.webview.postMessage({
+    type: "status",
+    payload: `Runtime not reachable: ${endpoint}`,
+  });
+  void sendRuntimeStatus();
+}
+
+async function handleRuntimeStop(): Promise<void> {
+  const activeSession = getStructuredTextSession();
+  if (activeSession) {
+    await stopDebugging();
+    return;
+  }
+  const status = await runtimeStatusPayload();
+  if (status.runtimeState === "connected") {
+    const target = runtimeConfigTarget();
+    const config = vscode.workspace.getConfiguration("trust-lsp", target);
+    await config.update(
+      "runtime.controlEndpointEnabled",
+      false,
+      runtimeConfigScope(target)
+    );
+    void sendRuntimeStatus();
   }
 }
 
@@ -619,8 +1083,8 @@ async function compileActiveProgram(options: CompileOptions = {}): Promise<void>
 
   let runtimeStatus: CompileResult["runtimeStatus"] = "skipped";
   let runtimeMessage: string | undefined;
-  const session = vscode.debug.activeDebugSession;
-  if (session && session.type === DEBUG_TYPE) {
+  const session = getStructuredTextSession();
+  if (session) {
     const program =
       typeof session.configuration?.program === "string"
         ? session.configuration.program
@@ -806,13 +1270,11 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
         top: 0;
         z-index: 10;
         display: flex;
-        align-items: center;
-        justify-content: flex-start;
-        gap: 16px;
+        flex-direction: column;
+        gap: 8px;
         padding: 8px;
         background: var(--bg);
         border-bottom: 1px solid var(--border);
-        flex-wrap: wrap;
       }
 
       h1 {
@@ -821,11 +1283,110 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
         font-weight: 600;
       }
 
-      .header-left {
+      .header-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .header-search {
+        display: flex;
+      }
+
+      .runtime-status {
         display: flex;
         align-items: center;
         gap: 12px;
+        font-size: 12px;
+        color: var(--muted);
         flex-wrap: wrap;
+      }
+
+      .mode-toggle {
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+
+      .mode-button {
+        background: transparent;
+        border: none;
+        color: var(--text);
+        padding: 4px 10px;
+        font-size: 11px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .mode-button.active {
+        background: var(--button-bg);
+        color: var(--button-fg);
+      }
+
+      .mode-button:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
+
+      .mode-subtitle {
+        font-size: 11px;
+        color: var(--muted);
+        margin-right: 8px;
+      }
+
+      .status-group {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .status-pill {
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--row-alt);
+        color: var(--text);
+        white-space: nowrap;
+      }
+
+      .status-pill.on,
+      .status-pill.running {
+        background: var(--button-bg);
+        color: var(--button-fg);
+        border-color: transparent;
+      }
+
+      .status-pill.off {
+        opacity: 0.7;
+      }
+
+      .status-pill.connected {
+        border-color: var(--button-bg);
+      }
+
+      .status-pill.disconnected {
+        opacity: 0.7;
+      }
+
+      .status-action {
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text);
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+      }
+
+      .status-action:hover {
+        background: var(--row-alt);
+      }
+
+      .status-action:disabled {
+        cursor: default;
+        opacity: 0.5;
       }
 
       input#filter {
@@ -892,6 +1453,15 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
 
       .icon-btn:active {
         background: var(--row-alt);
+      }
+
+      .icon-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      .icon-btn:disabled:hover {
+        background: transparent;
       }
 
       .icon-btn.primary {
@@ -1238,33 +1808,28 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   </head>
   <body>
     <header>
-      <div class="header-left">
+      <div class="header-top">
         <div class="toolbar">
-          <button
-            id="start"
-            class="icon-btn primary"
-            title="Compile & Start Debugging"
-            aria-label="Compile & Start Debugging"
-          >
-            <span class="codicon codicon-debug-start" aria-hidden="true"></span>
-          </button>
-          <button
-            id="compile"
-            class="icon-btn"
-            title="Compile"
-            aria-label="Compile"
-          >
-            <span class="codicon codicon-build" aria-hidden="true"></span>
-          </button>
+          <div class="mode-toggle" role="group" aria-label="Runtime mode">
+            <button id="modeSimulate" class="mode-button" type="button" title="Use the local runtime started by the debugger." aria-label="Use the local runtime started by the debugger">Local</button>
+            <button id="modeOnline" class="mode-button" type="button" title="Connect to a running runtime at the configured endpoint." aria-label="Connect to a running runtime at the configured endpoint">External</button>
+          </div>
+          <button id="runtimeStart" type="button" title="Start or stop the selected runtime." aria-label="Start or stop the selected runtime">Start</button>
           <button
             id="settings"
             class="icon-btn"
-            title="Runtime control settings"
-            aria-label="Runtime control settings"
+            title="Open runtime settings"
+            aria-label="Open runtime settings"
+            type="button"
           >
             <span class="codicon codicon-settings-gear" aria-hidden="true"></span>
           </button>
         </div>
+        <div class="runtime-status">
+          <span id="runtimeStatusText" class="status-pill disconnected">Stopped</span>
+        </div>
+      </div>
+      <div class="header-search">
         <input id="filter" placeholder="Filter by name or address" />
       </div>
     </header>
@@ -1292,8 +1857,8 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
             </div>
           </div>
           <div class="settings-actions">
-            <button id="settingsSave">Save</button>
-            <button id="settingsCancel" class="button-ghost">Close</button>
+            <button id="settingsSave" title="Save runtime settings" aria-label="Save runtime settings">Save</button>
+            <button id="settingsCancel" class="button-ghost" title="Close without saving" aria-label="Close without saving">Close</button>
           </div>
         </div>
         <div class="settings-grid">
@@ -1304,7 +1869,7 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
               <input
                 id="runtimeControlEndpoint"
                 type="text"
-                placeholder="unix:///tmp/trust-debug.sock or tcp://127.0.0.1:7401"
+                placeholder="unix:///tmp/trust-debug.sock or tcp://127.0.0.1:9901"
                 autocomplete="off"
               />
             </div>
@@ -1317,8 +1882,15 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
                 autocomplete="off"
               />
             </div>
+            <div class="settings-row">
+              <label for="runtimeInlineValuesEnabled">Inline values</label>
+              <input
+                id="runtimeInlineValuesEnabled"
+                type="checkbox"
+              />
+            </div>
             <div class="settings-help">
-              Used for inline values and debugger attach.
+              Inline values show live runtime values in the editor.
             </div>
           </section>
           <section class="settings-section">

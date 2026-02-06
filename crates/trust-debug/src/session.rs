@@ -21,6 +21,7 @@ use crate::runtime::DebugRuntime;
 
 const MSG_MISSING_SOURCE: &str = "source path not provided";
 const MSG_UNKNOWN_SOURCE: &str = "source not registered";
+const MSG_PENDING_SOURCE: &str = "source pending (program not loaded yet)";
 const MSG_INVALID_POSITION: &str = "line/column are 1-based";
 const MSG_INVALID_LOG_MESSAGE: &str = "invalid log message";
 const MSG_INVALID_CONDITION: &str = "invalid breakpoint condition";
@@ -412,6 +413,23 @@ impl BreakpointManager {
 
         let source_file = context.sources.get(&key);
         let Some(source_file) = source_file else {
+            if context.sources.is_empty() {
+                report_lines.push("  pending: program not loaded yet".to_string());
+                self.last_report = Some(report_lines.join("\n"));
+                return SetBreakpointsResponseBody {
+                    breakpoints: requested
+                        .into_iter()
+                        .map(|bp| {
+                            Breakpoint::unverified(
+                                bp.line,
+                                bp.column,
+                                Some(args.source.clone()),
+                                Some(MSG_PENDING_SOURCE.into()),
+                            )
+                        })
+                        .collect(),
+                };
+            }
             report_lines.push("  error: unknown source file".to_string());
             self.last_report = Some(report_lines.join("\n"));
             return SetBreakpointsResponseBody {
@@ -1411,5 +1429,51 @@ END_PROGRAM
         assert_eq!(updated.len(), 1);
         assert_eq!(updated[0].line, Some(line));
         assert!(updated[0].verified);
+    }
+
+    #[test]
+    fn session_resolves_if_header_breakpoint_to_if_statement() {
+        let source = r#"PROGRAM Main
+VAR
+    startCmd : BOOL := TRUE;
+    x : INT := 0;
+END_VAR
+IF startCmd THEN
+    x := x + 1;
+END_IF;
+END_PROGRAM
+"#;
+        let harness = TestHarness::from_source(source).unwrap();
+        let mut session = DebugSession::new(harness.into_runtime());
+        session.register_source("main.st", 0, source);
+
+        let if_line = source
+            .lines()
+            .position(|line| line.trim_start().starts_with("IF startCmd THEN"))
+            .unwrap() as u32
+            + 1;
+        let args = SetBreakpointsArguments {
+            source: Source {
+                name: Some("main".into()),
+                path: Some("main.st".into()),
+                source_reference: None,
+            },
+            breakpoints: Some(vec![SourceBreakpoint {
+                line: if_line,
+                column: Some(1),
+                condition: None,
+                hit_condition: None,
+                log_message: None,
+            }]),
+            lines: None,
+            source_modified: None,
+        };
+
+        let response = session.set_breakpoints(&args);
+        assert_eq!(response.breakpoints.len(), 1);
+        let bp = &response.breakpoints[0];
+        assert!(bp.verified);
+        assert_eq!(bp.line, Some(if_line));
+        assert_eq!(bp.column, Some(1));
     }
 }

@@ -21,7 +21,10 @@ pub(crate) fn matches_breakpoint(
         if bp_location.file_id != location.file_id {
             continue;
         }
-        if location.start != bp_location.start || location.end != bp_location.end {
+        // Source mapping can resolve to nearby-but-not-identical spans after
+        // edits/reformatting; treat overlapping ranges as the same statement.
+        let overlaps = location.start < bp_location.end && bp_location.start < location.end;
+        if !overlaps {
             continue;
         }
         breakpoint.hits = breakpoint.hits.saturating_add(1);
@@ -110,14 +113,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn breakpoints_require_exact_location_match() {
+    fn breakpoints_match_on_overlapping_location() {
         let outer = SourceLocation::new(0, 0, 20);
         let inner = SourceLocation::new(0, 5, 10);
         let mut breakpoints = vec![DebugBreakpoint::new(inner)];
         let mut logs = Vec::new();
         let mut ctx = None;
 
-        assert!(matches_breakpoint(&mut breakpoints, &mut logs, None, &outer, &mut ctx).is_none());
+        assert!(matches_breakpoint(&mut breakpoints, &mut logs, None, &outer, &mut ctx).is_some());
         assert!(matches_breakpoint(&mut breakpoints, &mut logs, None, &inner, &mut ctx).is_some());
+    }
+
+    #[test]
+    fn breakpoints_do_not_match_non_overlapping_location() {
+        let left = SourceLocation::new(0, 0, 5);
+        let right = SourceLocation::new(0, 6, 10);
+        let mut breakpoints = vec![DebugBreakpoint::new(left)];
+        let mut logs = Vec::new();
+        let mut ctx = None;
+
+        assert!(matches_breakpoint(&mut breakpoints, &mut logs, None, &right, &mut ctx).is_none());
     }
 }

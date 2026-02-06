@@ -167,6 +167,13 @@
           "default": [],
           "description": "Glob patterns of Structured Text sources to exclude from the runtime load set."
         },
+        "trust-lsp.runtime.mode": {
+          "type": "string",
+          "enum": ["simulate", "online"],
+          "default": "simulate",
+          "description": "Default runtime mode for the runtime panel.",
+          "scope": "resource"
+        },
         "trust-lsp.runtime.controlEndpoint": {
           "type": "string",
           "default": "",
@@ -179,7 +186,18 @@
           "description": "Optional auth token for the runtime control endpoint override.",
           "scope": "resource"
         },
-        "trust-lsp.runtime.ignorePragmas": {
+        "trust-lsp.runtime.controlEndpointEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use the configured runtime control endpoint for inline values.",
+          "scope": "resource"
+        },
+        "trust-lsp.runtime.inlineValuesEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline values in the editor.",
+          "scope": "resource"
+        },        "trust-lsp.runtime.ignorePragmas": {
           "type": "array",
           "items": {
             "type": "string"

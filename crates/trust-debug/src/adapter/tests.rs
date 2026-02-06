@@ -389,6 +389,135 @@ fn dispatch_run_controls_update_debug_mode() {
 }
 
 #[test]
+fn dispatch_pause_falls_back_to_global_when_no_active_thread() {
+    let runtime = Runtime::new();
+    let mut adapter = DebugAdapter::new(DebugSession::new(runtime));
+    let control = adapter.session().debug_control();
+
+    control.set_current_thread(None);
+    let pause_req = Request {
+        seq: 1,
+        message_type: MessageType::Request,
+        command: "pause".to_string(),
+        arguments: Some(serde_json::to_value(PauseArguments { thread_id: 1 }).unwrap()),
+    };
+
+    adapter.dispatch_request(pause_req);
+    assert_eq!(control.mode(), trust_runtime::debug::DebugMode::Paused);
+    assert_eq!(control.target_thread(), None);
+}
+
+#[test]
+fn dispatch_continue_then_immediate_pause_emits_pause_stop() {
+    let source = r#"PROGRAM Main
+VAR
+    x : INT := 0;
+END_VAR
+x := x + 1;
+END_PROGRAM
+"#;
+    let harness = TestHarness::from_source(source).unwrap();
+    let mut session = DebugSession::new(harness.into_runtime());
+    session.register_source("main.st", 0, source);
+    let mut adapter = DebugAdapter::new(session);
+    let control = adapter.session().debug_control();
+
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+    control.set_stop_sender(stop_tx);
+
+    let line = source
+        .lines()
+        .position(|line| line.contains("x := x + 1;"))
+        .unwrap() as u32
+        + 1;
+    let set_breakpoint_req = Request {
+        seq: 1,
+        message_type: MessageType::Request,
+        command: "setBreakpoints".to_string(),
+        arguments: Some(
+            serde_json::to_value(SetBreakpointsArguments {
+                source: Source {
+                    name: Some("main".into()),
+                    path: Some("main.st".into()),
+                    source_reference: None,
+                },
+                breakpoints: Some(vec![SourceBreakpoint {
+                    line,
+                    column: Some(1),
+                    condition: None,
+                    hit_condition: None,
+                    log_message: None,
+                }]),
+                lines: None,
+                source_modified: None,
+            })
+            .unwrap(),
+        ),
+    };
+    let _ = adapter.dispatch_request(set_breakpoint_req);
+
+    let runtime = adapter.session().runtime_handle();
+    let stop_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop_flag_thread = std::sync::Arc::clone(&stop_flag);
+    let handle = std::thread::spawn(move || {
+        while !stop_flag_thread.load(std::sync::atomic::Ordering::Relaxed) {
+            let mut guard = runtime.lock().unwrap();
+            let _ = guard.execute_cycle();
+        }
+    });
+
+    let first = stop_rx
+        .recv_timeout(std::time::Duration::from_millis(250))
+        .expect("first stop");
+    assert_eq!(first.reason, DebugStopReason::Breakpoint);
+
+    let clear_breakpoint_req = Request {
+        seq: 2,
+        message_type: MessageType::Request,
+        command: "setBreakpoints".to_string(),
+        arguments: Some(
+            serde_json::to_value(SetBreakpointsArguments {
+                source: Source {
+                    name: Some("main".into()),
+                    path: Some("main.st".into()),
+                    source_reference: None,
+                },
+                breakpoints: Some(Vec::new()),
+                lines: None,
+                source_modified: None,
+            })
+            .unwrap(),
+        ),
+    };
+    let _ = adapter.dispatch_request(clear_breakpoint_req);
+
+    let continue_req = Request {
+        seq: 3,
+        message_type: MessageType::Request,
+        command: "continue".to_string(),
+        arguments: Some(serde_json::to_value(ContinueArguments { thread_id: 1 }).unwrap()),
+    };
+    let _ = adapter.dispatch_request(continue_req);
+
+    let pause_req = Request {
+        seq: 4,
+        message_type: MessageType::Request,
+        command: "pause".to_string(),
+        arguments: Some(serde_json::to_value(PauseArguments { thread_id: 1 }).unwrap()),
+    };
+    let _ = adapter.dispatch_request(pause_req);
+
+    let second = stop_rx
+        .recv_timeout(std::time::Duration::from_millis(250))
+        .expect("pause stop");
+    assert_eq!(second.reason, DebugStopReason::Pause);
+
+    stop_flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    control.continue_run();
+    handle.join().expect("hook thread joins");
+}
+
+#[test]
 fn dispatch_threads_maps_tasks() {
     let mut runtime = Runtime::new();
     runtime

@@ -133,6 +133,20 @@ pub fn ident_at_offset(source: &str, offset: TextSize) -> Option<(&str, TextRang
             return Some((&source[start..end], token.range));
         }
     }
+    if offset == 0 {
+        return None;
+    }
+    let fallback = offset - 1;
+    for token in lex(source) {
+        if token.kind != TokenKind::Ident {
+            continue;
+        }
+        let start = usize::from(token.range.start());
+        let end = usize::from(token.range.end());
+        if start <= fallback && fallback < end {
+            return Some((&source[start..end], token.range));
+        }
+    }
     None
 }
 

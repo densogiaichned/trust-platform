@@ -6,9 +6,7 @@ use std::collections::HashMap;
 use text_size::{TextRange, TextSize};
 
 use crate::refactor::{move_namespace_path, namespace_full_path, parse_namespace_path};
-use crate::references::{
-    find_references_to_field, find_references_to_symbol, FindReferencesOptions,
-};
+use crate::references::{find_references, find_references_to_field, FindReferencesOptions};
 use crate::util::{ident_at_offset, resolve_target_at_position, FieldTarget, ResolvedTarget};
 use trust_hir::db::{FileId, SemanticDatabase};
 use trust_hir::symbols::{ScopeId, SymbolTable};
@@ -119,13 +117,27 @@ pub fn rename_symbol(
         return None;
     }
 
+    let symbols = db.file_symbols_with_project(file_id);
+    let target_symbol = symbols.get(symbol_id)?;
+    let (target_file_id, target_position) = match target_symbol.origin {
+        Some(origin) => {
+            let origin_symbols = db.file_symbols_with_project(origin.file_id);
+            let position = origin_symbols
+                .get(origin.symbol_id)
+                .map(|sym| sym.range.start())
+                .unwrap_or(target_symbol.range.start());
+            (origin.file_id, position)
+        }
+        None => (file_id, target_symbol.range.start()),
+    };
+
     let mut result = RenameResult::new();
 
-    // Find all references (including declaration)
-    let references = find_references_to_symbol(
+    // Find all references across project (including declaration)
+    let references = find_references(
         db,
-        file_id,
-        symbol_id,
+        target_file_id,
+        target_position,
         FindReferencesOptions {
             include_declaration: true,
         },

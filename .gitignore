@@ -23,6 +23,10 @@ editors/vscode/*.vsix
 .claude-plugin/
 .trust-lsp/
 **/.trust-lsp/
+
+# Local debug/lsp binaries (too large for GitHub; built locally)
+editors/vscode/bin/trust-debug
+editors/vscode/bin/trust-lsp
 manual-tests/**/target/
 manual-tests/**/.vscode/
 

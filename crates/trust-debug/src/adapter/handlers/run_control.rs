@@ -105,7 +105,9 @@ impl DebugAdapter {
         }
 
         self.pause_expected.store(true, Ordering::SeqCst);
-        self.session.debug_control().pause_thread(_args.thread_id);
+        // DAP pause is effectively "pause the debuggee". Thread ids are advisory here,
+        // and thread-scoped pause can miss if the runtime reports thread transitions.
+        self.session.debug_control().pause();
 
         DispatchOutcome {
             responses: vec![self.ok_response::<Value>(&request, None)],

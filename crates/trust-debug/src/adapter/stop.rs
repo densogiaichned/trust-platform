@@ -46,6 +46,7 @@ impl StopCoordinator {
     pub fn spawn(self, stop_rx: Receiver<DebugStop>) -> JoinHandle<()> {
         thread::spawn(move || {
             while let Ok(stop) = stop_rx.recv() {
+                self.trace_stop("recv", &stop, None);
                 self.stop_gate.wait_clear();
                 if !self.should_emit_stop(&stop) {
                     continue;
@@ -61,6 +62,11 @@ impl StopCoordinator {
         match stop.reason {
             DebugStopReason::Pause | DebugStopReason::Entry => {
                 if !self.pause_expected.swap(false, Ordering::SeqCst) {
+                    self.trace_stop(
+                        "drop",
+                        stop,
+                        Some("pause/entry without pause_expected".to_string()),
+                    );
                     return false;
                 }
             }
@@ -70,15 +76,35 @@ impl StopCoordinator {
         }
         if matches!(stop.reason, DebugStopReason::Breakpoint) {
             let Some(location) = stop.location else {
+                self.trace_stop(
+                    "drop",
+                    stop,
+                    Some("breakpoint without location".to_string()),
+                );
                 return false;
             };
             let Some(generation) = stop.breakpoint_generation else {
+                self.trace_stop(
+                    "drop",
+                    stop,
+                    Some("breakpoint without generation".to_string()),
+                );
                 return false;
             };
-            if self.stop_control.breakpoint_generation(location.file_id) != Some(generation) {
+            let current = self.stop_control.breakpoint_generation(location.file_id);
+            if current != Some(generation) {
+                self.trace_stop(
+                    "drop",
+                    stop,
+                    Some(format!(
+                        "breakpoint generation mismatch file_id={} current={:?} stop={}",
+                        location.file_id, current, generation
+                    )),
+                );
                 return false;
             }
         }
+        self.trace_stop("emit", stop, None);
         true
     }
 
@@ -163,5 +189,82 @@ impl StopCoordinator {
             }
         }
         true
+    }
+
+    fn trace_stop(&self, action: &str, stop: &DebugStop, detail: Option<String>) {
+        let reason = match stop.reason {
+            DebugStopReason::Breakpoint => "breakpoint",
+            DebugStopReason::Step => "step",
+            DebugStopReason::Pause => "pause",
+            DebugStopReason::Entry => "entry",
+        };
+        let location = stop
+            .location
+            .map(|loc| format!("{}:{}..{}", loc.file_id, loc.start, loc.end))
+            .unwrap_or_else(|| "<none>".to_string());
+        let detail = detail.unwrap_or_default();
+        if let Some(logger) = &self.logger {
+            let _ = write_protocol_log(
+                logger,
+                "##",
+                &format!(
+                    "[trust-debug][stop] action={} reason={} thread={:?} bp_gen={:?} location={} detail={}",
+                    action, reason, stop.thread_id, stop.breakpoint_generation, location, detail
+                ),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::BufWriter;
+    use std::sync::Arc;
+
+    use trust_runtime::debug::{DebugBreakpoint, SourceLocation};
+
+    fn test_coordinator(control: DebugControl) -> StopCoordinator {
+        StopCoordinator::new(
+            StopGate::new(),
+            Arc::new(AtomicBool::new(false)),
+            control,
+            Arc::new(Mutex::new(BufWriter::new(std::io::stdout()))),
+            None,
+            Arc::new(AtomicU32::new(1)),
+        )
+    }
+
+    #[test]
+    fn breakpoint_stop_is_emitted_without_pause_expected_when_generation_matches() {
+        let control = DebugControl::new();
+        let location = SourceLocation::new(0, 21, 42);
+        control.set_breakpoints_for_file(0, vec![DebugBreakpoint::new(location)]);
+        let generation = control
+            .breakpoint_generation(0)
+            .expect("breakpoint generation");
+        let coordinator = test_coordinator(control);
+        let stop = DebugStop {
+            reason: DebugStopReason::Breakpoint,
+            location: Some(location),
+            thread_id: Some(1),
+            breakpoint_generation: Some(generation),
+        };
+        assert!(coordinator.should_emit_stop(&stop));
+    }
+
+    #[test]
+    fn breakpoint_stop_is_dropped_when_generation_mismatches() {
+        let control = DebugControl::new();
+        let location = SourceLocation::new(0, 21, 42);
+        control.set_breakpoints_for_file(0, vec![DebugBreakpoint::new(location)]);
+        let coordinator = test_coordinator(control);
+        let stop = DebugStop {
+            reason: DebugStopReason::Breakpoint,
+            location: Some(location),
+            thread_id: Some(1),
+            breakpoint_generation: Some(999),
+        };
+        assert!(!coordinator.should_emit_stop(&stop));
     }
 }

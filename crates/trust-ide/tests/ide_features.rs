@@ -444,6 +444,87 @@ END_PROGRAM
     );
 }
 
+#[test]
+fn test_rename_function_block_updates_type_usage_in_other_file() {
+    let fb_source = r#"
+FUNCTION_BLOCK LevelControllerFb
+END_FUNCTION_BLOCK
+"#;
+    let main_source = r#"
+PROGRAM Main
+VAR
+    Ctrl : LevelControllerFb;
+END_VAR
+END_PROGRAM
+"#;
+
+    let mut db = Database::new();
+    let fb_file = FileId(0);
+    let main_file = FileId(1);
+    db.set_source_text(fb_file, fb_source.to_string());
+    db.set_source_text(main_file, main_source.to_string());
+
+    let pos = TextSize::from(fb_source.find("LevelControllerFb").unwrap() as u32);
+    let result = rename(&db, fb_file, pos, "LevelControllerFb2")
+        .expect("rename should succeed across files");
+
+    let fb_edits = result
+        .edits
+        .get(&fb_file)
+        .expect("expected declaration edit in FB file");
+    assert!(
+        fb_edits.iter().any(|edit| &fb_source
+            [u32::from(edit.range.start()) as usize..u32::from(edit.range.end()) as usize]
+            == "LevelControllerFb"),
+        "expected declaration edit in FB file"
+    );
+
+    let main_edits = result
+        .edits
+        .get(&main_file)
+        .expect("expected type-usage edit in Main file");
+    assert!(
+        main_edits.iter().any(|edit| &main_source
+            [u32::from(edit.range.start()) as usize..u32::from(edit.range.end()) as usize]
+            == "LevelControllerFb"),
+        "expected type usage edit in Main file"
+    );
+}
+
+#[test]
+fn test_rename_function_block_from_usage_site_updates_declaration() {
+    let fb_source = r#"
+FUNCTION_BLOCK LevelControllerFb
+END_FUNCTION_BLOCK
+"#;
+    let main_source = r#"
+PROGRAM Main
+VAR
+    Ctrl : LevelControllerFb;
+END_VAR
+END_PROGRAM
+"#;
+
+    let mut db = Database::new();
+    let fb_file = FileId(0);
+    let main_file = FileId(1);
+    db.set_source_text(fb_file, fb_source.to_string());
+    db.set_source_text(main_file, main_source.to_string());
+
+    let pos = TextSize::from(main_source.find("LevelControllerFb").unwrap() as u32);
+    let result = rename(&db, main_file, pos, "LevelControllerFb2")
+        .expect("rename should succeed from usage site");
+
+    assert!(
+        result.edits.contains_key(&fb_file),
+        "expected declaration edit in FB file"
+    );
+    assert!(
+        result.edits.contains_key(&main_file),
+        "expected usage edit in Main file"
+    );
+}
+
 // =============================================================================
 // Semantic Token Tests
 // =============================================================================

@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -258,5 +259,151 @@ END_PROGRAM
     let stop = stop_rx.recv_timeout(Duration::from_millis(500)).unwrap();
     assert_eq!(stop.reason, DebugStopReason::Breakpoint);
     control.continue_run();
+    handle.join().unwrap();
+}
+
+#[test]
+fn breakpoint_rehits_each_cycle_after_continue() {
+    let source = r#"PROGRAM Main
+VAR
+    StartCmd : BOOL := TRUE;
+    Count : INT := 0;
+END_VAR
+    IF StartCmd THEN
+        Count := Count + 1;
+    END_IF;
+END_PROGRAM
+"#;
+
+    let session = CompileSession::from_sources(vec![SourceFile::new(source)]);
+    let mut runtime = session.build_runtime().unwrap();
+    let if_location = resolve_location(&runtime, source, 0, "IF StartCmd THEN");
+
+    let control = runtime.enable_debug();
+    let (stop_tx, stop_rx) = channel();
+    control.set_stop_sender(stop_tx);
+    control.set_breakpoints_for_file(0, vec![DebugBreakpoint::new(if_location)]);
+
+    let runtime = Arc::new(Mutex::new(runtime));
+    let runtime_thread = runtime.clone();
+    let handle = thread::spawn(move || {
+        let mut runtime = runtime_thread.lock().expect("runtime lock poisoned");
+        runtime.execute_cycle().unwrap();
+        runtime.execute_cycle().unwrap();
+        runtime.execute_cycle().unwrap();
+    });
+
+    let stop1 = stop_rx.recv_timeout(Duration::from_millis(500)).unwrap();
+    assert_eq!(stop1.reason, DebugStopReason::Breakpoint);
+    control.continue_run();
+
+    let stop2 = stop_rx.recv_timeout(Duration::from_millis(500)).unwrap();
+    assert_eq!(stop2.reason, DebugStopReason::Breakpoint);
+    control.continue_run();
+
+    let stop3 = stop_rx.recv_timeout(Duration::from_millis(500)).unwrap();
+    assert_eq!(stop3.reason, DebugStopReason::Breakpoint);
+    control.continue_run();
+
+    handle.join().unwrap();
+}
+
+#[test]
+fn breakpoint_set_after_launch_hits_next_cycle() {
+    let source = r#"PROGRAM Main
+VAR
+    Count : INT := 0;
+END_VAR
+    Count := Count + 1;
+END_PROGRAM
+"#;
+
+    let session = CompileSession::from_sources(vec![SourceFile::new(source)]);
+    let mut runtime = session.build_runtime().unwrap();
+    let increment_location = resolve_location(&runtime, source, 0, "Count := Count + 1");
+
+    let control = runtime.enable_debug();
+    let (stop_tx, stop_rx) = channel();
+    control.set_stop_sender(stop_tx);
+
+    let (first_cycle_done_tx, first_cycle_done_rx) = channel();
+    let (continue_cycles_tx, continue_cycles_rx) = channel();
+
+    let runtime = Arc::new(Mutex::new(runtime));
+    let runtime_thread = runtime.clone();
+    let handle = thread::spawn(move || {
+        let mut runtime = runtime_thread.lock().expect("runtime lock poisoned");
+
+        // Launch/run starts with no breakpoints configured.
+        runtime.execute_cycle().unwrap();
+        first_cycle_done_tx.send(()).unwrap();
+
+        // Simulate user adding a breakpoint after launch, then run next cycle.
+        continue_cycles_rx.recv().unwrap();
+        runtime.execute_cycle().unwrap();
+    });
+
+    first_cycle_done_rx
+        .recv_timeout(Duration::from_millis(500))
+        .unwrap();
+    assert!(stop_rx.recv_timeout(Duration::from_millis(100)).is_err());
+
+    control.set_breakpoints_for_file(0, vec![DebugBreakpoint::new(increment_location)]);
+    continue_cycles_tx.send(()).unwrap();
+
+    let stop = stop_rx.recv_timeout(Duration::from_millis(500)).unwrap();
+    assert_eq!(stop.reason, DebugStopReason::Breakpoint);
+    let location = stop.location.expect("breakpoint location");
+    assert_eq!(location.file_id, 0);
+    assert_eq!(location.start, increment_location.start);
+
+    control.continue_run();
+    handle.join().unwrap();
+}
+
+#[test]
+fn breakpoint_set_while_running_hits_on_subsequent_cycle() {
+    let source = r#"PROGRAM Main
+VAR
+    Count : INT := 0;
+END_VAR
+    Count := Count + 1;
+END_PROGRAM
+"#;
+
+    let session = CompileSession::from_sources(vec![SourceFile::new(source)]);
+    let mut runtime = session.build_runtime().unwrap();
+    let increment_location = resolve_location(&runtime, source, 0, "Count := Count + 1");
+
+    let control = runtime.enable_debug();
+    let (stop_tx, stop_rx) = channel();
+    control.set_stop_sender(stop_tx);
+
+    let running = Arc::new(AtomicBool::new(true));
+    let runtime = Arc::new(Mutex::new(runtime));
+    let runtime_thread = Arc::clone(&runtime);
+    let running_thread = Arc::clone(&running);
+    let handle = thread::spawn(move || {
+        let mut runtime = runtime_thread.lock().expect("runtime lock poisoned");
+        while running_thread.load(Ordering::SeqCst) {
+            runtime.execute_cycle().unwrap();
+        }
+    });
+
+    // Let launch/run proceed without breakpoints first.
+    thread::sleep(Duration::from_millis(50));
+    assert!(stop_rx.recv_timeout(Duration::from_millis(100)).is_err());
+
+    // Set breakpoint while runtime is already running.
+    control.set_breakpoints_for_file(0, vec![DebugBreakpoint::new(increment_location)]);
+
+    let stop = stop_rx.recv_timeout(Duration::from_millis(1000)).unwrap();
+    assert_eq!(stop.reason, DebugStopReason::Breakpoint);
+    let location = stop.location.expect("breakpoint location");
+    assert_eq!(location.file_id, 0);
+    assert_eq!(location.start, increment_location.start);
+
+    control.continue_run();
+    running.store(false, Ordering::SeqCst);
     handle.join().unwrap();
 }

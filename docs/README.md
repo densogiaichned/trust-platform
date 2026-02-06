@@ -20,8 +20,9 @@ Diagrams are also auto-rendered in CI via `.github/workflows/diagrams.yml`.
 
 Use `trust-lsp.toml` at the workspace root to configure indexing and runtime-assisted features.
 For inline values you can also set the runtime control endpoint from the VS Code
-**Structured Text Runtime** panel (gear icon → Runtime Settings), which writes a workspace
-setting override.
+**Structured Text Runtime** panel (gear icon → Runtime Settings). In **External** mode the panel
+connects to that endpoint; in **Local** mode it starts a local runtime for debugging and
+inline values.
 
 ```toml
 [project]

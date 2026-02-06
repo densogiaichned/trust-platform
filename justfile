@@ -14,3 +14,18 @@ check:
 	cargo check --all
 
 lint: fmt clippy
+
+readme-media:
+	./scripts/prepare-readme-media.sh --dir editors/vscode/assets
+
+plant-demo-media:
+	./scripts/capture-plant-demo-media.sh
+
+plant-demo-media-pro:
+	./scripts/capture-plant-demo-media-pro.sh
+
+filling-line-media-pro:
+	./scripts/capture-filling-line-media-pro.sh
+
+filling-line-debug-scene:
+	./scripts/capture-filling-line-debug-scene.sh

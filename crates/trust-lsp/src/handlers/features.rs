@@ -45,20 +45,49 @@ use super::runtime_values::{fetch_runtime_inline_values, RuntimeInlineValues};
 
 const PARTIAL_CHUNK_SIZE: usize = 200;
 
-fn runtime_control_override(state: &ServerState) -> (Option<String>, Option<String>) {
-    let value = state.config();
+fn runtime_section(value: &Value) -> Option<&Value> {
     let section = value
         .get("stLsp")
         .or_else(|| value.get("trust-lsp"))
         .or_else(|| value.get("trust_lsp"))
         .or_else(|| {
             let has_runtime = value.get("runtime").is_some();
-            has_runtime.then_some(&value)
+            has_runtime.then_some(value)
         });
-    let runtime = match section.and_then(|section| section.get("runtime")) {
+    section.and_then(|section| section.get("runtime"))
+}
+
+fn runtime_flag(runtime: &Value, keys: &[&str]) -> Option<bool> {
+    for key in keys {
+        if let Some(value) = runtime.get(*key).and_then(Value::as_bool) {
+            return Some(value);
+        }
+    }
+    None
+}
+
+fn runtime_inline_values_enabled(state: &ServerState) -> bool {
+    let value = state.config();
+    let Some(runtime) = runtime_section(&value) else {
+        return true;
+    };
+    runtime_flag(runtime, &["inlineValuesEnabled", "inline_values_enabled"]).unwrap_or(true)
+}
+
+fn runtime_control_override(state: &ServerState) -> (Option<String>, Option<String>) {
+    let value = state.config();
+    let runtime = match runtime_section(&value) {
         Some(runtime) => runtime,
         None => return (None, None),
     };
+    let control_enabled = runtime_flag(
+        runtime,
+        &["controlEndpointEnabled", "control_endpoint_enabled"],
+    )
+    .unwrap_or(true);
+    if !control_enabled {
+        return (None, None);
+    }
     let endpoint = runtime
         .get("controlEndpoint")
         .or_else(|| runtime.get("control_endpoint"))
@@ -1381,6 +1410,11 @@ pub fn inline_value(state: &ServerState, params: InlineValueParams) -> Option<Ve
     let start_offset = position_to_offset(&doc.content, params.range.start)?;
     let end_offset = position_to_offset(&doc.content, params.range.end)?;
     if end_offset < start_offset {
+        return Some(Vec::new());
+    }
+
+    if !runtime_inline_values_enabled(state) {
+        debug!("inlineValue skipped: disabled via settings");
         return Some(Vec::new());
     }
 

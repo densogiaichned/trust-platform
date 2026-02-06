@@ -12,6 +12,10 @@ const runtimeView = document.getElementById("runtimeView");
 const settingsPanel = document.getElementById("settingsPanel");
 const settingsSave = document.getElementById("settingsSave");
 const settingsCancel = document.getElementById("settingsCancel");
+const runtimeStatusText = document.getElementById("runtimeStatusText");
+const runtimeStart = document.getElementById("runtimeStart");
+const modeSimulate = document.getElementById("modeSimulate");
+const modeOnline = document.getElementById("modeOnline");
 const settingsFields = {
   serverPath: document.getElementById("serverPath"),
   traceServer: document.getElementById("traceServer"),
@@ -21,6 +25,9 @@ const settingsFields = {
   runtimeControlEndpoint: document.getElementById("runtimeControlEndpoint"),
   runtimeControlAuthToken: document.getElementById(
     "runtimeControlAuthToken"
+  ),
+  runtimeInlineValuesEnabled: document.getElementById(
+    "runtimeInlineValuesEnabled"
   ),
   runtimeIncludeGlobs: document.getElementById("runtimeIncludeGlobs"),
   runtimeExcludeGlobs: document.getElementById("runtimeExcludeGlobs"),
@@ -67,16 +74,19 @@ window.addEventListener("unhandledrejection", (event) => {
   reportWebviewError(message, stack);
 });
 
-const startButton = document.getElementById("start");
-if (startButton) {
-  startButton.addEventListener("click", () => {
-    vscode.postMessage({ type: "compileAndStart" });
+if (runtimeStart) {
+  runtimeStart.addEventListener("click", () => {
+    vscode.postMessage({ type: "runtimeStart" });
   });
 }
-const compileButton = document.getElementById("compile");
-if (compileButton) {
-  compileButton.addEventListener("click", () => {
-    vscode.postMessage({ type: "compile" });
+if (modeSimulate) {
+  modeSimulate.addEventListener("click", () => {
+    vscode.postMessage({ type: "runtimeSetMode", mode: "simulate" });
+  });
+}
+if (modeOnline) {
+  modeOnline.addEventListener("click", () => {
+    vscode.postMessage({ type: "runtimeSetMode", mode: "online" });
   });
 }
 const settingsButton = document.getElementById("settings");
@@ -222,6 +232,7 @@ function collectSettingsPayload() {
     runtimeControlAuthToken: getFieldValue(
       settingsFields.runtimeControlAuthToken
     ),
+    runtimeInlineValuesEnabled: !!settingsFields.runtimeInlineValuesEnabled?.checked,
     runtimeIncludeGlobs: textToArray(
       getFieldValue(settingsFields.runtimeIncludeGlobs)
     ),
@@ -232,6 +243,47 @@ function collectSettingsPayload() {
       getFieldValue(settingsFields.runtimeIgnorePragmas)
     ),
   };
+}
+
+function applyRuntimeStatus(payload) {
+  if (!payload) {
+    return;
+  }
+  const running = !!payload.running;
+  const runtimeState = payload.runtimeState || (running ? "running" : "stopped");
+  const connected = runtimeState === "connected";
+  const mode = payload.runtimeMode || "simulate";
+
+  if (modeSimulate) {
+    modeSimulate.classList.toggle("active", mode === "simulate");
+    modeSimulate.disabled = running || connected;
+  }
+  if (modeOnline) {
+    modeOnline.classList.toggle("active", mode === "online");
+    modeOnline.disabled = running || connected;
+  }
+
+  if (runtimeStart) {
+    let label = "Start";
+    if (runtimeState === "connected") {
+      label = "Disconnect";
+    } else if (running) {
+      label = "Stop";
+    }
+    runtimeStart.textContent = label;
+    runtimeStart.disabled = false;
+  }
+
+
+  if (runtimeStatusText) {
+    const isRunning = runtimeState === "running" || runtimeState === "connected";
+    const label = isRunning ? "Running" : "Stopped";
+    runtimeStatusText.textContent = label;
+    runtimeStatusText.classList.toggle("running", isRunning);
+    runtimeStatusText.classList.toggle("connected", runtimeState === "connected");
+    runtimeStatusText.classList.toggle("disconnected", !isRunning);
+    runtimeStatusText.title = payload.endpoint || "";
+  }
 }
 
 function applySettingsPayload(payload) {
@@ -257,6 +309,10 @@ function applySettingsPayload(payload) {
     settingsFields.runtimeControlAuthToken,
     payload.runtimeControlAuthToken || ""
   );
+  if (settingsFields.runtimeInlineValuesEnabled) {
+    settingsFields.runtimeInlineValuesEnabled.checked =
+      payload.runtimeInlineValuesEnabled !== false;
+  }
   setFieldValue(
     settingsFields.runtimeIncludeGlobs,
     arrayToText(payload.runtimeIncludeGlobs)
@@ -530,21 +586,21 @@ function renderRows(entries, options = {}) {
       const writeButton = document.createElement("button");
       writeButton.className = "mini-btn";
       writeButton.textContent = "W";
-      writeButton.title = "Write";
+      writeButton.title = "Write once (next cycle)";
       writeButton.disabled = !canWrite;
       writeButton.addEventListener("click", () => sendValue("write"));
 
       const forceButton = document.createElement("button");
       forceButton.className = "mini-btn";
       forceButton.textContent = "F";
-      forceButton.title = "Force";
+      forceButton.title = "Force continuously";
       forceButton.disabled = !canForce;
       forceButton.addEventListener("click", () => sendValue("force"));
 
       const releaseButton = document.createElement("button");
       releaseButton.className = "mini-btn";
       releaseButton.textContent = "R";
-      releaseButton.title = "Release";
+      releaseButton.title = "Release force";
       releaseButton.disabled = !canRelease;
       releaseButton.addEventListener("click", () => sendValue("release"));
 
@@ -657,5 +713,12 @@ window.addEventListener("message", (event) => {
   }
   if (message.type === "settings") {
     applySettingsPayload(message.payload || {});
+  }
+  if (message.type === "runtimeStatus") {
+    applyRuntimeStatus(message.payload || {});
+  }
+
+  if (message.type === "openSettings") {
+    setSettingsOpen(true);
   }
 });
