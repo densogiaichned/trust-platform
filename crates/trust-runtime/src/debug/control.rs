@@ -1152,16 +1152,26 @@ mod tests {
             .expect("breakpoint stop");
         assert_eq!(first.reason, DebugStopReason::Breakpoint);
 
-        // Race window: continue and immediately pause again while the hook may still be waking.
+        // Race window: continue and immediately pause again while the first hook may still be waking.
         control.continue_run();
         control.pause();
 
+        // Always drive a fresh statement boundary after pause so a pending pause stop is consumed
+        // deterministically even if the first hook already exited after continue.
+        // Use a different location so this fallback path cannot hit the original breakpoint.
+        let second_location = SourceLocation::new(1, 0, 5);
+        let mut second_hook = control.clone();
+        let second_handle = thread::spawn(move || {
+            second_hook.on_statement(Some(&second_location), 0);
+        });
+
         let second = stop_rx
-            .recv_timeout(Duration::from_millis(250))
+            .recv_timeout(Duration::from_secs(1))
             .expect("pause stop");
         assert_eq!(second.reason, DebugStopReason::Pause);
 
         control.continue_run();
         handle.join().expect("hook thread joins");
+        second_handle.join().expect("second hook thread joins");
     }
 }
