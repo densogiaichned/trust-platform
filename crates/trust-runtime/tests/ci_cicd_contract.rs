@@ -157,6 +157,35 @@ fn ci_clean_setup_first_passing_test_is_under_ten_minutes() {
 }
 
 #[test]
+fn ci_single_test_feedback_is_under_two_seconds_for_small_project() {
+    let project = copy_fixture("green");
+    let started = Instant::now();
+
+    let tests = run_trust_runtime(
+        &project,
+        &["test", "--ci", "--output", "json", "--filter", "CI_Passes"],
+    );
+    assert_success(&tests, "test --ci --output json --filter CI_Passes");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "expected single-test feedback under 2 seconds, got {:.3}s",
+        elapsed.as_secs_f64()
+    );
+
+    let payload: serde_json::Value =
+        serde_json::from_slice(&tests.stdout).expect("parse filtered test JSON");
+    assert_eq!(
+        payload["summary"]["total"], 1,
+        "expected filter to execute exactly one test case"
+    );
+    assert_eq!(payload["summary"]["failed"], 0);
+    assert_eq!(payload["summary"]["errors"], 0);
+
+    let _ = std::fs::remove_dir_all(project);
+}
+
+#[test]
 fn ci_template_workflow_fails_on_broken_fixture_with_expected_code_and_report() {
     let project = copy_fixture("broken");
 
