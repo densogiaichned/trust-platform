@@ -37,6 +37,7 @@ mdns-sd = "0.10"
 base64 = "0.22"
 rand = "0.8"
 ureq = "2"
+sha2 = "0.10"
 
 [features]
 default = ["debug"]

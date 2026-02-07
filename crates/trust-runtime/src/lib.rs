@@ -42,6 +42,8 @@ pub mod metrics;
 mod numeric;
 /// PLCopen XML import/export helpers (strict subset profile).
 pub mod plcopen;
+/// Local package registry contracts and workflows.
+pub mod registry;
 /// Retain storage support.
 pub mod retain;
 /// Resource scheduling helpers and clocks.

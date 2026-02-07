@@ -1,6 +1,6 @@
 {
   "docs/diagrams/architecture/runtime-execution.puml": "715bb1fcb464d3af8b59c9d59428dbfc3672a6f32a82050953562428ff6110cc",
-  "docs/diagrams/architecture/system-architecture.puml": "114b70f880a78b1578395ada04f97511b931ce72149e3d6900776273035f15f3",
+  "docs/diagrams/architecture/system-architecture.puml": "138b8f4fe94820d4a24bdff5f16da1fecb1a03cce96f35a83a072a9c86899f3b",
   "docs/diagrams/debug/debug-architecture.puml": "de1760df5871bd5a029467e80a5a8b1f6d817fc0de9761e80ead1347372d48f8",
   "docs/diagrams/debug/debug-breakpoint-after-launch-actual-observed.puml": "26f721f18337bb329bff7587d829284e5cac207bdff52dc7dcc899b38ddb4173",
   "docs/diagrams/debug/debug-breakpoint-after-launch-intended.puml": "3ad28b011555187f43da1b5bb4a95f4a2d267e55d77daf1f9411008745d9b527",

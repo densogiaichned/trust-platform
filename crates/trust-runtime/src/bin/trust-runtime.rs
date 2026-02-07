@@ -22,6 +22,8 @@ mod git;
 mod plcopen;
 #[path = "trust-runtime/prompt.rs"]
 mod prompt;
+#[path = "trust-runtime/registry.rs"]
+mod registry;
 #[path = "trust-runtime/run.rs"]
 mod run;
 #[path = "trust-runtime/setup.rs"]
@@ -162,6 +164,7 @@ fn run() -> anyhow::Result<()> {
             format,
         }) => docs::run_docs(project, out_dir, format),
         Some(Command::Plcopen { action }) => plcopen::run_plcopen(action),
+        Some(Command::Registry { action }) => registry::run_registry(action),
         Some(Command::Setup {
             driver,
             backend,
@@ -213,6 +216,7 @@ fn suggest_subcommand(input: &str) -> Option<&'static str> {
         "test",
         "docs",
         "plcopen",
+        "registry",
         "deploy",
         "rollback",
         "commit",

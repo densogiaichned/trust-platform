@@ -143,6 +143,7 @@ package "trust-runtime crate" as struntime #LightYellow {
     component "StandardLibrary" as stdlib <<stdlib/>>
     component "Harness Facade\n(CompileSession)" as harness <<harness/api.rs>>
     component "Runtime Launcher\n(trust-runtime CLI)" as launcher
+    component "Registry Workflows\n(trust-runtime registry)" as registryCli
     component "BundleLoader" as bundleLoader
     component "IoDriverRegistry" as ioRegistry
     component "RetainManager" as retainMgr
@@ -179,6 +180,8 @@ package "trust-runtime crate" as struntime #LightYellow {
     launcher --> bundleLoader
     bundleLoader --> runtimeConfig
     launcher --> harness : loads bytecode
+    launcher --> registryCli : delegates\nregistry subcommands
+    registryCli --> bundleLoader : validates bundle
     launcher --> ioRegistry
     launcher --> retainMgr
     launcher --> runtime
@@ -211,6 +214,7 @@ package "trust-debug crate" as stdebug #Lavender {
 ' ============================================================
 package "Deployment" as deploy #LightGray {
     artifact "Project Folder\n(Runtime Bundle Format)\nprogram.stbc, runtime.toml, io.toml" as bundle
+    artifact "Package Registry Root\n(index.json, packages/*)" as packageRegistry
     artifact "Project Sources\n(sources/**/*.st)" as sourceFiles
     artifact "System IO Config\n(/etc/trust/io.toml)" as systemIo
     component "Retain Store\n(file/db)" as retainStore
@@ -252,7 +256,9 @@ harness --> struntime : runtime + bytecode
 stdebug --> struntime : runtime + debug control
 stdebug -up-> vscode : DAP events
 bundle --> launcher : load
+bundle --> registryCli : publish payload
 sourceFiles --> webIde : scoped read/write
+registryCli --> packageRegistry : publish/download/verify/index
 systemIo --> launcher : load (fallback)
 retainMgr --> retainStore : load/save
 runtime --> hardwareIo : drivers
@@ -280,6 +286,7 @@ legend right
     • trust-hir/src/db/queries.rs - Semantic DB
     • trust-syntax/src/parser/parser.rs - Parser
     • trust-runtime/src/runtime/core.rs - Runtime
+    • trust-runtime/src/registry.rs - Registry contract/workflows
 end legend
 
 @enduml
