@@ -14,13 +14,17 @@ use trust_runtime::control::{
 };
 use trust_runtime::discovery::{start_discovery, DiscoveryState};
 use trust_runtime::harness::CompileSession;
+use trust_runtime::historian::HistorianService;
 use trust_runtime::io::IoDriverRegistry;
 use trust_runtime::mesh::start_mesh;
 use trust_runtime::metrics::RuntimeMetrics;
+use trust_runtime::opcua::{start_wire_server, OpcUaWireServer};
 use trust_runtime::retain::FileRetainStore;
-use trust_runtime::scheduler::{ResourceRunner, StartGate, StdClock};
+use trust_runtime::scheduler::{ResourceCommand, ResourceRunner, StartGate, StdClock};
+use trust_runtime::security::load_tls_materials;
 use trust_runtime::settings::{
-    BaseSettings, DiscoverySettings, MeshSettings, RuntimeSettings, SimulationSettings, WebSettings,
+    BaseSettings, DiscoverySettings, MeshSettings, OpcUaSettings, RuntimeSettings,
+    SimulationSettings, WebSettings,
 };
 use trust_runtime::value::Duration;
 use trust_runtime::web::pairing::PairingStore;
@@ -131,6 +135,7 @@ pub fn run_play(
 
 pub fn run_validate(bundle: PathBuf, ci: bool) -> anyhow::Result<()> {
     let bundle = RuntimeBundle::load(&bundle)?;
+    let _tls_materials = load_tls_materials(&bundle.runtime.tls, Some(bundle.root.as_path()))?;
     let control_endpoint = ControlEndpoint::parse(bundle.runtime.control_endpoint.as_str())?;
     if matches!(control_endpoint, ControlEndpoint::Tcp(_))
         && bundle.runtime.control_auth_token.is_none()
@@ -348,6 +353,11 @@ pub fn run_runtime(
     } else {
         ControlEndpoint::parse("tcp://127.0.0.1:9000")?
     };
+    let tls_materials = if let Some(bundle) = bundle.as_ref() {
+        load_tls_materials(&bundle.runtime.tls, Some(bundle.root.as_path()))?.map(Arc::new)
+    } else {
+        None
+    };
     if matches!(control_endpoint, ControlEndpoint::Tcp(_)) {
         let token = bundle
             .as_ref()
@@ -373,7 +383,7 @@ pub fn run_runtime(
     let mut handle = runner.spawn("trust-runtime")?;
     let control = handle.control();
 
-    let settings = if let Some(bundle) = &bundle {
+    let mut settings = if let Some(bundle) = &bundle {
         RuntimeSettings::new(
             BaseSettings {
                 log_level: bundle.runtime.log_level.clone(),
@@ -389,6 +399,7 @@ pub fn run_runtime(
                     trust_runtime::config::WebAuthMode::Local => "local",
                     trust_runtime::config::WebAuthMode::Token => "token",
                 }),
+                tls: bundle.runtime.web.tls,
             },
             DiscoverySettings {
                 enabled: bundle.runtime.discovery.enabled,
@@ -399,6 +410,7 @@ pub fn run_runtime(
             MeshSettings {
                 enabled: bundle.runtime.mesh.enabled,
                 listen: bundle.runtime.mesh.listen.clone(),
+                tls: bundle.runtime.mesh.tls,
                 auth_token: bundle.runtime.mesh.auth_token.clone(),
                 publish: bundle.runtime.mesh.publish.clone(),
                 subscribe: bundle.runtime.mesh.subscribe.clone(),
@@ -427,6 +439,7 @@ pub fn run_runtime(
                 enabled: false,
                 listen: SmolStr::new("0.0.0.0:8080"),
                 auth: SmolStr::new("local"),
+                tls: false,
             },
             DiscoverySettings {
                 enabled: false,
@@ -437,6 +450,7 @@ pub fn run_runtime(
             MeshSettings {
                 enabled: false,
                 listen: SmolStr::new("0.0.0.0:5200"),
+                tls: false,
                 auth_token: None,
                 publish: Vec::new(),
                 subscribe: indexmap::IndexMap::new(),
@@ -453,6 +467,21 @@ pub fn run_runtime(
             },
         )
     };
+    if let Some(bundle) = &bundle {
+        settings.opcua = OpcUaSettings {
+            enabled: bundle.runtime.opcua.enabled,
+            listen: bundle.runtime.opcua.listen.clone(),
+            endpoint_path: bundle.runtime.opcua.endpoint_path.clone(),
+            namespace_uri: bundle.runtime.opcua.namespace_uri.clone(),
+            publish_interval_ms: bundle.runtime.opcua.publish_interval_ms,
+            max_nodes: bundle.runtime.opcua.max_nodes,
+            expose: bundle.runtime.opcua.expose.clone(),
+            security_policy: SmolStr::new(bundle.runtime.opcua.security.policy.as_config_value()),
+            security_mode: SmolStr::new(bundle.runtime.opcua.security.mode.as_config_value()),
+            allow_anonymous: bundle.runtime.opcua.security.allow_anonymous,
+            username_set: bundle.runtime.opcua.username.is_some(),
+        };
+    }
     let auth_token_value = bundle
         .as_ref()
         .and_then(|bundle| bundle.runtime.control_auth_token.as_ref())
@@ -465,6 +494,20 @@ pub fn run_runtime(
     let pairing = bundle
         .as_ref()
         .map(|bundle| Arc::new(PairingStore::load(bundle.root.join("pairings.json"))));
+    let historian = if let Some(bundle) = &bundle {
+        if bundle.runtime.observability.enabled {
+            let service = HistorianService::new(
+                bundle.runtime.observability.clone(),
+                Some(bundle.root.as_path()),
+            )?;
+            service.clone().start_sampler(debug.clone());
+            Some(service)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let (audit_tx, audit_rx) = std::sync::mpsc::channel();
     let audit_logger = logger.clone();
     std::thread::spawn(move || {
@@ -506,8 +549,33 @@ pub fn run_runtime(
         )),
         debug_variables: Arc::new(Mutex::new(trust_runtime::debug::DebugVariableHandles::new())),
         hmi_live: Arc::new(Mutex::new(trust_runtime::hmi::HmiLiveState::default())),
+        historian: historian.clone(),
         pairing: pairing.clone(),
     });
+
+    let mut opcua_server: Option<OpcUaWireServer> = None;
+    if let Some(bundle) = &bundle {
+        let snapshot_control = control.clone();
+        let snapshot_debug = debug.clone();
+        let snapshot_provider = Arc::new(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            if snapshot_control
+                .send_command(ResourceCommand::Snapshot { respond_to: tx })
+                .is_ok()
+            {
+                if let Ok(snapshot) = rx.recv_timeout(std::time::Duration::from_millis(250)) {
+                    return Some(snapshot);
+                }
+            }
+            snapshot_debug.snapshot()
+        });
+        opcua_server = start_wire_server(
+            bundle.runtime.resource_name.as_str(),
+            &bundle.runtime.opcua,
+            snapshot_provider,
+            Some(bundle.root.as_path()),
+        )?;
+    }
 
     let _server = ControlServer::start(control_endpoint.clone(), state.clone())?;
     let _discovery_handle = if let Some(bundle) = &bundle {
@@ -540,6 +608,7 @@ pub fn run_runtime(
                 Some(discovery_state.clone()),
                 pairing.clone(),
                 Some(bundle.root.clone()),
+                tls_materials.clone(),
             )?)
         } else {
             None
@@ -553,6 +622,7 @@ pub fn run_runtime(
             bundle.runtime.resource_name.clone(),
             control.clone(),
             Some(discovery_state.clone()),
+            tls_materials.clone(),
         )?
     } else {
         None
@@ -563,7 +633,9 @@ pub fn run_runtime(
         let web_url = bundle
             .as_ref()
             .filter(|bundle| bundle.runtime.web.enabled)
-            .map(|bundle| format_web_url(bundle.runtime.web.listen.as_str()));
+            .map(|bundle| {
+                format_web_url(bundle.runtime.web.listen.as_str(), bundle.runtime.web.tls)
+            });
         print_trust_banner(
             bundle.as_ref(),
             web_url.as_deref(),
@@ -602,6 +674,7 @@ pub fn run_runtime(
                 bundle,
                 restart_mode,
                 &control_endpoint,
+                opcua_server.as_ref().map(|server| server.endpoint_url()),
                 simulation_enabled,
                 simulation_time_scale,
             );
@@ -630,17 +703,32 @@ pub fn run_runtime(
                 "control_mode": format!("{:?}", bundle.runtime.control_mode),
                 "web_enabled": bundle.runtime.web.enabled,
                 "web_listen": bundle.runtime.web.listen.to_string(),
+                "web_tls": bundle.runtime.web.tls,
                 "discovery_enabled": bundle.runtime.discovery.enabled,
                 "mesh_enabled": bundle.runtime.mesh.enabled,
+                "mesh_tls": bundle.runtime.mesh.tls,
+                "opcua_enabled": bundle.runtime.opcua.enabled,
+                "opcua_endpoint": opcua_server
+                    .as_ref()
+                    .map(|server| server.endpoint_url().to_string()),
+                "opcua_security_policy": bundle.runtime.opcua.security.policy.as_config_value(),
+                "opcua_security_mode": bundle.runtime.opcua.security.mode.as_config_value(),
+                "opcua_allow_anonymous": bundle.runtime.opcua.security.allow_anonymous,
+                "opcua_username_set": bundle.runtime.opcua.username.is_some(),
+                "opcua_exposed_patterns": bundle.runtime.opcua.expose.len(),
                 "simulation_mode": if simulation_enabled { "simulation" } else { "production" },
                 "simulation_time_scale": simulation_time_scale,
             }),
         );
     }
 
-    handle
+    let join_result = handle
         .join()
-        .map_err(|_| anyhow::anyhow!("runtime thread panicked"))?;
+        .map_err(|_| anyhow::anyhow!("runtime thread panicked"));
+    if let Some(server) = opcua_server.as_mut() {
+        server.stop();
+    }
+    join_result?;
     logger.log(
         LogLevel::Debug,
         "runtime_exit",
@@ -711,6 +799,7 @@ fn print_startup_summary(
     bundle: &RuntimeBundle,
     restart: RestartMode,
     endpoint: &ControlEndpoint,
+    opcua_endpoint: Option<&str>,
     simulation_enabled: bool,
     simulation_time_scale: u32,
 ) {
@@ -794,6 +883,18 @@ fn print_startup_summary(
         },
         bundle.runtime.mesh.listen
     );
+    println!(
+        "opc ua: {} ({})",
+        if bundle.runtime.opcua.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        bundle.runtime.opcua.listen
+    );
+    if let Some(endpoint) = opcua_endpoint {
+        println!("opc ua endpoint: {endpoint}");
+    }
 }
 
 fn format_retain_mode(mode: trust_runtime::watchdog::RetainMode) -> &'static str {
@@ -803,11 +904,12 @@ fn format_retain_mode(mode: trust_runtime::watchdog::RetainMode) -> &'static str
     }
 }
 
-fn format_web_url(listen: &str) -> String {
+fn format_web_url(listen: &str, tls: bool) -> String {
     let host = listen.split(':').next().unwrap_or("localhost");
     let port = listen.rsplit(':').next().unwrap_or("8080");
     let host = if host == "0.0.0.0" { "localhost" } else { host };
-    format!("http://{host}:{port}")
+    let scheme = if tls { "https" } else { "http" };
+    format!("{scheme}://{host}:{port}")
 }
 
 fn simulation_warning_message(enabled: bool, time_scale: u32) -> Option<String> {

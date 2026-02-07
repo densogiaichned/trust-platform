@@ -11,6 +11,12 @@ pub(super) fn dispatch(request: &ControlRequest, state: &ControlState) -> Option
         "faults" => super::super::handle_faults(request.id, request.params.clone(), state),
         "config.get" => super::super::handle_config_get(request.id, state),
         "config.set" => super::super::handle_config_set(request.id, request.params.clone(), state),
+        "historian.query" => {
+            super::super::handle_historian_query(request.id, request.params.clone(), state)
+        }
+        "historian.alerts" => {
+            super::super::handle_historian_alerts(request.id, request.params.clone(), state)
+        }
         _ => return None,
     };
     Some(response)

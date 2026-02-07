@@ -34,6 +34,7 @@ fn runtime_settings() -> RuntimeSettings {
             enabled: true,
             listen: SmolStr::new("127.0.0.1:0"),
             auth: SmolStr::new("local"),
+            tls: false,
         },
         DiscoverySettings {
             enabled: false,
@@ -44,6 +45,7 @@ fn runtime_settings() -> RuntimeSettings {
         MeshSettings {
             enabled: false,
             listen: SmolStr::new("127.0.0.1:0"),
+            tls: false,
             auth_token: None,
             publish: Vec::new(),
             subscribe: IndexMap::new(),
@@ -109,6 +111,7 @@ fn hmi_control_state(source: &str) -> Arc<ControlState> {
         debug_enabled: Arc::new(AtomicBool::new(true)),
         debug_variables: Arc::new(Mutex::new(DebugVariableHandles::new())),
         hmi_live: Arc::new(Mutex::new(trust_runtime::hmi::HmiLiveState::default())),
+        historian: None,
         pairing: None,
     })
 }
@@ -127,8 +130,10 @@ fn start_test_server(state: Arc<ControlState>) -> String {
         enabled: true,
         listen: SmolStr::new(listen.clone()),
         auth: WebAuthMode::Local,
+        tls: false,
     };
-    let _server = start_web_server(&config, state, None, None, None).expect("start web server");
+    let _server =
+        start_web_server(&config, state, None, None, None, None).expect("start web server");
     let base = format!("http://{listen}");
     wait_for_server(&base);
     base

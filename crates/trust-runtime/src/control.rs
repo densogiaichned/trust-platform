@@ -22,6 +22,7 @@ use crate::io::{IoAddress, IoDriverHealth, IoDriverStatus, IoSnapshot};
 use crate::metrics::RuntimeMetrics;
 use crate::runtime::RuntimeMetadata;
 use crate::scheduler::{ResourceCommand, ResourceControl};
+use crate::security::AccessRole;
 use crate::settings::RuntimeSettings;
 use crate::value::Value;
 use crate::web::pairing::PairingStore;
@@ -84,6 +85,7 @@ pub struct ControlState {
     pub debug_enabled: Arc<AtomicBool>,
     pub debug_variables: Arc<Mutex<DebugVariableHandles>>,
     pub hmi_live: Arc<Mutex<crate::hmi::HmiLiveState>>,
+    pub historian: Option<Arc<crate::historian::HistorianService>>,
     pub pairing: Option<Arc<PairingStore>>,
 }
 
@@ -197,22 +199,37 @@ pub(crate) fn handle_request_value(
             return response;
         }
     };
-    if let Ok(guard) = state.auth_token.lock() {
-        if let Some(expected) = guard.as_deref() {
-            if request.auth.as_deref() != Some(expected) {
-                let response = ControlResponse::error(request.id, "unauthorized".into());
-                record_audit(
-                    state,
-                    request.id,
-                    SmolStr::new(request.r#type.as_str()),
-                    false,
-                    Some(SmolStr::new("unauthorized")),
-                    request.auth.is_some(),
-                    client,
-                );
-                return response;
-            }
+    let request_role = match resolve_request_role(&request, state) {
+        Ok(role) => role,
+        Err(error) => {
+            let response = ControlResponse::error(request.id, error.to_string());
+            record_audit(
+                state,
+                request.id,
+                SmolStr::new(request.r#type.as_str()),
+                false,
+                Some(SmolStr::new(error)),
+                request.auth.is_some(),
+                client,
+            );
+            return response;
         }
+    };
+    let required_role =
+        required_role_for_control_request(request.r#type.as_str(), request.params.as_ref());
+    if !request_role.allows(required_role) {
+        let error = format!("forbidden: requires role {}", required_role.as_str());
+        let response = ControlResponse::error(request.id, error.clone());
+        record_audit(
+            state,
+            request.id,
+            SmolStr::new(request.r#type.as_str()),
+            false,
+            Some(SmolStr::new(error)),
+            request.auth.is_some(),
+            client,
+        );
+        return response;
     }
     if !state.debug_enabled.load(Ordering::Relaxed) && is_debug_request(request.r#type.as_str()) {
         let response = ControlResponse::error(request.id, "debug disabled".into());
@@ -295,6 +312,102 @@ fn is_debug_request(kind: &str) -> bool {
             | "debug.evaluate"
             | "debug.breakpoint_locations"
     )
+}
+
+fn resolve_request_role(
+    request: &ControlRequest,
+    state: &ControlState,
+) -> Result<AccessRole, &'static str> {
+    let provided = request.auth.as_deref();
+    let expected = state.auth_token.lock().ok().and_then(|guard| guard.clone());
+    if let Some(expected) = expected {
+        if provided == Some(expected.as_str()) {
+            return Ok(AccessRole::Admin);
+        }
+        if let Some(token) = provided {
+            if let Some(store) = state.pairing.as_ref() {
+                if let Some(role) = store.validate_with_role(token) {
+                    return Ok(role);
+                }
+            }
+        }
+        return Err("unauthorized");
+    }
+    if let Some(token) = provided {
+        if let Some(store) = state.pairing.as_ref() {
+            if let Some(role) = store.validate_with_role(token) {
+                return Ok(role);
+            }
+        }
+    }
+    Ok(AccessRole::Admin)
+}
+
+fn required_role_for_control_request(kind: &str, params: Option<&serde_json::Value>) -> AccessRole {
+    match kind {
+        "status"
+        | "health"
+        | "tasks.stats"
+        | "events.tail"
+        | "events"
+        | "faults"
+        | "config.get"
+        | "io.list"
+        | "io.read"
+        | "hmi.schema.get"
+        | "hmi.values.get"
+        | "hmi.trends.get"
+        | "hmi.alarms.get"
+        | "historian.query"
+        | "historian.alerts"
+        | "debug.state"
+        | "debug.stops"
+        | "debug.stack"
+        | "debug.scopes"
+        | "debug.variables"
+        | "debug.breakpoint_locations"
+        | "breakpoints.list"
+        | "var.forced" => AccessRole::Viewer,
+        "pause" | "resume" | "restart" | "hmi.alarm.ack" | "pair.claim" => AccessRole::Operator,
+        "step_in"
+        | "step_over"
+        | "step_out"
+        | "breakpoints.set"
+        | "breakpoints.clear"
+        | "breakpoints.clear_all"
+        | "breakpoints.clear_id"
+        | "eval"
+        | "set"
+        | "var.force"
+        | "var.unforce"
+        | "io.write"
+        | "io.force"
+        | "io.unforce"
+        | "debug.evaluate"
+        | "hmi.write" => AccessRole::Engineer,
+        "config.set" => required_role_for_config_set(params),
+        "shutdown" | "bytecode.reload" | "pair.start" | "pair.list" | "pair.revoke" => {
+            AccessRole::Admin
+        }
+        _ => AccessRole::Viewer,
+    }
+}
+
+fn required_role_for_config_set(params: Option<&serde_json::Value>) -> AccessRole {
+    let Some(params) = params.and_then(serde_json::Value::as_object) else {
+        return AccessRole::Engineer;
+    };
+    let requires_admin = params.keys().any(|key| {
+        matches!(
+            key.as_str(),
+            "control.auth_token" | "mesh.auth_token" | "control.mode" | "web.auth"
+        )
+    });
+    if requires_admin {
+        AccessRole::Admin
+    } else {
+        AccessRole::Engineer
+    }
 }
 
 fn handle_status(id: u64, state: &ControlState) -> ControlResponse {
@@ -723,6 +836,48 @@ fn handle_faults(
     ControlResponse::ok(id, json!({ "faults": faults }))
 }
 
+fn handle_historian_query(
+    id: u64,
+    params: Option<serde_json::Value>,
+    state: &ControlState,
+) -> ControlResponse {
+    let Some(historian) = state.historian.as_ref() else {
+        return ControlResponse::error(id, "historian disabled".into());
+    };
+    let params = match params {
+        Some(value) => match serde_json::from_value::<HistorianQueryParams>(value) {
+            Ok(parsed) => parsed,
+            Err(err) => return ControlResponse::error(id, format!("invalid params: {err}")),
+        },
+        None => HistorianQueryParams::default(),
+    };
+    let items = historian.query(
+        params.variable.as_deref(),
+        params.since_ms,
+        params.limit.unwrap_or(250),
+    );
+    ControlResponse::ok(id, json!({ "items": items }))
+}
+
+fn handle_historian_alerts(
+    id: u64,
+    params: Option<serde_json::Value>,
+    state: &ControlState,
+) -> ControlResponse {
+    let Some(historian) = state.historian.as_ref() else {
+        return ControlResponse::error(id, "historian disabled".into());
+    };
+    let params = match params {
+        Some(value) => match serde_json::from_value::<HistorianAlertsParams>(value) {
+            Ok(parsed) => parsed,
+            Err(err) => return ControlResponse::error(id, format!("invalid params: {err}")),
+        },
+        None => HistorianAlertsParams::default(),
+    };
+    let items = historian.alerts(params.limit.unwrap_or(200));
+    ControlResponse::ok(id, json!({ "items": items }))
+}
+
 fn handle_config_get(id: u64, state: &ControlState) -> ControlResponse {
     let settings = match state.settings.lock() {
         Ok(guard) => guard.clone(),
@@ -734,6 +889,52 @@ fn handle_config_get(id: u64, state: &ControlState) -> ControlResponse {
         .and_then(|value| value.as_ref())
         .map(|value| value.len())
         .unwrap_or(0);
+    let observability = state.historian.as_ref().map(|hist| hist.config().clone());
+    let observability_alerts = observability
+        .as_ref()
+        .map(|cfg| {
+            cfg.alerts
+                .iter()
+                .map(|rule| {
+                    let mut item = serde_json::Map::new();
+                    item.insert(
+                        "name".to_string(),
+                        serde_json::Value::String(rule.name.to_string()),
+                    );
+                    item.insert(
+                        "variable".to_string(),
+                        serde_json::Value::String(rule.variable.to_string()),
+                    );
+                    item.insert(
+                        "above".to_string(),
+                        rule.above
+                            .and_then(serde_json::Number::from_f64)
+                            .map(serde_json::Value::Number)
+                            .unwrap_or(serde_json::Value::Null),
+                    );
+                    item.insert(
+                        "below".to_string(),
+                        rule.below
+                            .and_then(serde_json::Number::from_f64)
+                            .map(serde_json::Value::Number)
+                            .unwrap_or(serde_json::Value::Null),
+                    );
+                    item.insert(
+                        "debounce_samples".to_string(),
+                        serde_json::Value::Number(serde_json::Number::from(rule.debounce_samples)),
+                    );
+                    item.insert(
+                        "hook".to_string(),
+                        rule.hook
+                            .as_ref()
+                            .map(|value| serde_json::Value::String(value.to_string()))
+                            .unwrap_or(serde_json::Value::Null),
+                    );
+                    serde_json::Value::Object(item)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     ControlResponse::ok(
         id,
         json!({
@@ -747,12 +948,14 @@ fn handle_config_get(id: u64, state: &ControlState) -> ControlResponse {
             "web.enabled": settings.web.enabled,
             "web.listen": settings.web.listen.as_str(),
             "web.auth": settings.web.auth.as_str(),
+            "web.tls": settings.web.tls,
             "discovery.enabled": settings.discovery.enabled,
             "discovery.service_name": settings.discovery.service_name.as_str(),
             "discovery.advertise": settings.discovery.advertise,
             "discovery.interfaces": settings.discovery.interfaces.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
             "mesh.enabled": settings.mesh.enabled,
             "mesh.listen": settings.mesh.listen.as_str(),
+            "mesh.tls": settings.mesh.tls,
             "mesh.auth_token_set": settings.mesh.auth_token.as_ref().map(|t| t.len()).unwrap_or(0) > 0,
             "mesh.publish": settings.mesh.publish.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
             "mesh.subscribe": settings
@@ -766,6 +969,17 @@ fn handle_config_get(id: u64, state: &ControlState) -> ControlResponse {
                     )
                 })
                 .collect::<serde_json::Map<_, _>>(),
+            "opcua.enabled": settings.opcua.enabled,
+            "opcua.listen": settings.opcua.listen.as_str(),
+            "opcua.endpoint_path": settings.opcua.endpoint_path.as_str(),
+            "opcua.namespace_uri": settings.opcua.namespace_uri.as_str(),
+            "opcua.publish_interval_ms": settings.opcua.publish_interval_ms,
+            "opcua.max_nodes": settings.opcua.max_nodes,
+            "opcua.expose": settings.opcua.expose.iter().map(|v| v.as_str()).collect::<Vec<_>>(),
+            "opcua.security_policy": settings.opcua.security_policy.as_str(),
+            "opcua.security_mode": settings.opcua.security_mode.as_str(),
+            "opcua.allow_anonymous": settings.opcua.allow_anonymous,
+            "opcua.username_set": settings.opcua.username_set,
             "control.auth_token_set": auth_set > 0,
             "control.auth_token_length": if auth_set > 0 { Some(auth_set) } else { None },
             "control.debug_enabled": state.debug_enabled.load(Ordering::Relaxed),
@@ -778,6 +992,21 @@ fn handle_config_get(id: u64, state: &ControlState) -> ControlResponse {
             "simulation.time_scale": settings.simulation.time_scale,
             "simulation.mode": settings.simulation.mode_label.as_str(),
             "simulation.warning": settings.simulation.warning.as_str(),
+            "observability.enabled": observability.as_ref().map(|cfg| cfg.enabled).unwrap_or(false),
+            "observability.sample_interval_ms": observability.as_ref().map(|cfg| cfg.sample_interval_ms),
+            "observability.mode": observability.as_ref().map(|cfg| match cfg.mode {
+                crate::historian::RecordingMode::All => "all",
+                crate::historian::RecordingMode::Allowlist => "allowlist",
+            }),
+            "observability.include": observability
+                .as_ref()
+                .map(|cfg| cfg.include.iter().map(|entry| entry.as_str()).collect::<Vec<_>>())
+                .unwrap_or_default(),
+            "observability.history_path": observability.as_ref().map(|cfg| cfg.history_path.display().to_string()),
+            "observability.max_entries": observability.as_ref().map(|cfg| cfg.max_entries),
+            "observability.prometheus_enabled": observability.as_ref().map(|cfg| cfg.prometheus_enabled),
+            "observability.prometheus_path": observability.as_ref().map(|cfg| cfg.prometheus_path.to_string()),
+            "observability.alerts": observability_alerts,
             "hmi.read_only": true,
         }),
     )
@@ -929,6 +1158,11 @@ fn handle_config_set(
                 updated.push("web.auth");
                 restart_required.push("web.auth");
             }
+            "web.tls" => {
+                settings.web.tls = parse_or_error!(expect_bool(key, value));
+                updated.push("web.tls");
+                restart_required.push("web.tls");
+            }
             "discovery.enabled" => {
                 settings.discovery.enabled = parse_or_error!(expect_bool(key, value));
                 updated.push("discovery.enabled");
@@ -963,6 +1197,11 @@ fn handle_config_set(
                 settings.mesh.listen = SmolStr::new(listen);
                 updated.push("mesh.listen");
                 restart_required.push("mesh.listen");
+            }
+            "mesh.tls" => {
+                settings.mesh.tls = parse_or_error!(expect_bool(key, value));
+                updated.push("mesh.tls");
+                restart_required.push("mesh.tls");
             }
             "mesh.publish" => {
                 settings.mesh.publish = parse_or_error!(expect_string_array(key, value))
@@ -2279,7 +2518,14 @@ fn handle_pair_claim(
     let Some(store) = state.pairing.as_ref() else {
         return ControlResponse::error(id, "pairing unavailable".into());
     };
-    match store.claim(&params.code) {
+    let requested_role = match params.role.as_deref() {
+        Some(text) => match AccessRole::parse(text) {
+            Some(role) => Some(role),
+            None => return ControlResponse::error(id, "invalid role".into()),
+        },
+        None => None,
+    };
+    match store.claim(&params.code, requested_role) {
         Some(token) => ControlResponse::ok(id, json!({ "token": token })),
         None => ControlResponse::error(id, "invalid or expired code".into()),
     }
@@ -2432,6 +2678,18 @@ struct HmiAlarmAckParams {
     id: String,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct HistorianQueryParams {
+    variable: Option<String>,
+    since_ms: Option<u128>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct HistorianAlertsParams {
+    limit: Option<usize>,
+}
+
 #[derive(Debug, Deserialize)]
 struct IoWriteParams {
     address: String,
@@ -2484,6 +2742,7 @@ struct VarTargetParams {
 #[derive(Debug, Deserialize)]
 struct PairClaimParams {
     code: String,
+    role: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2613,8 +2872,10 @@ fn io_health_to_json(entry: &IoDriverStatus) -> serde_json::Value {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::path::PathBuf;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use indexmap::IndexMap;
     use serde_json::json;
@@ -2622,6 +2883,7 @@ mod tests {
     use crate::debug::DebugVariableHandles;
     use crate::error::RuntimeError;
     use crate::harness::TestHarness;
+    use crate::historian::{AlertRule, HistorianConfig, HistorianService, RecordingMode};
     use crate::metrics::RuntimeMetrics;
     use crate::scheduler::{ResourceCommand, ResourceControl, StdClock};
     use crate::settings::{
@@ -2629,6 +2891,15 @@ mod tests {
         WebSettings,
     };
     use crate::watchdog::{FaultPolicy, RetainMode, WatchdogPolicy};
+    use crate::web::pairing::PairingStore;
+
+    fn temp_history_path(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("trust-control-{name}-{stamp}.jsonl"))
+    }
 
     fn runtime_settings() -> RuntimeSettings {
         RuntimeSettings::new(
@@ -2643,6 +2914,7 @@ mod tests {
                 enabled: false,
                 listen: SmolStr::new("127.0.0.1:0"),
                 auth: SmolStr::new("local"),
+                tls: false,
             },
             DiscoverySettings {
                 enabled: false,
@@ -2653,6 +2925,7 @@ mod tests {
             MeshSettings {
                 enabled: false,
                 listen: SmolStr::new("127.0.0.1:0"),
+                tls: false,
                 auth_token: None,
                 publish: Vec::new(),
                 subscribe: IndexMap::new(),
@@ -2723,8 +2996,17 @@ mod tests {
             debug_enabled: Arc::new(AtomicBool::new(true)),
             debug_variables: Arc::new(Mutex::new(DebugVariableHandles::new())),
             hmi_live: Arc::new(Mutex::new(crate::hmi::HmiLiveState::default())),
+            historian: None,
             pairing: None,
         }
+    }
+
+    fn pairing_file(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        std::env::temp_dir().join(format!("trust-pairing-control-{name}-{stamp}.json"))
     }
 
     #[test]
@@ -3231,5 +3513,205 @@ END_PROGRAM
             invalid_restart.error.as_deref(),
             Some("invalid restart mode")
         );
+    }
+
+    #[test]
+    fn rbac_authorization_matrix_enforces_sensitive_endpoint_roles() {
+        let source = r#"
+PROGRAM Main
+VAR
+    run : BOOL := TRUE;
+END_VAR
+END_PROGRAM
+"#;
+        let mut state = hmi_test_state(source);
+        state.auth_token = Arc::new(Mutex::new(Some(SmolStr::new("admin-token"))));
+        state.control_requires_auth = true;
+        let pairing_path = pairing_file("matrix");
+        let store = Arc::new(PairingStore::load(pairing_path.clone()));
+        state.pairing = Some(store.clone());
+
+        let viewer_code = store.start_pairing();
+        let viewer_token = store
+            .claim(&viewer_code.code, Some(AccessRole::Viewer))
+            .expect("viewer token");
+        let operator_code = store.start_pairing();
+        let operator_token = store
+            .claim(&operator_code.code, Some(AccessRole::Operator))
+            .expect("operator token");
+        let engineer_code = store.start_pairing();
+        let engineer_token = store
+            .claim(&engineer_code.code, Some(AccessRole::Engineer))
+            .expect("engineer token");
+
+        let viewer_status = handle_request_value(
+            json!({"id": 50, "type": "status", "auth": viewer_token}),
+            &state,
+            None,
+        );
+        assert!(viewer_status.ok, "viewer should read status");
+
+        let viewer_restart = handle_request_value(
+            json!({"id": 51, "type": "restart", "auth": viewer_token, "params": {"mode": "warm"}}),
+            &state,
+            None,
+        );
+        assert!(!viewer_restart.ok, "viewer must not restart runtime");
+        assert!(viewer_restart
+            .error
+            .as_deref()
+            .is_some_and(|msg| msg.contains("requires role operator")));
+
+        let operator_restart = handle_request_value(
+            json!({"id": 52, "type": "restart", "auth": operator_token, "params": {"mode": "warm"}}),
+            &state,
+            None,
+        );
+        assert!(operator_restart.ok, "operator should restart runtime");
+
+        let operator_config = handle_request_value(
+            json!({"id": 53, "type": "config.set", "auth": operator_token, "params": {"log.level": "debug"}}),
+            &state,
+            None,
+        );
+        assert!(!operator_config.ok, "operator must not write config");
+        assert!(operator_config
+            .error
+            .as_deref()
+            .is_some_and(|msg| msg.contains("requires role engineer")));
+
+        let engineer_write = handle_request_value(
+            json!({
+                "id": 54,
+                "type": "io.write",
+                "auth": engineer_token,
+                "params": { "address": "%QX0.0", "value": "true" }
+            }),
+            &state,
+            None,
+        );
+        assert!(engineer_write.ok, "engineer should write I/O");
+
+        let engineer_pair_start = handle_request_value(
+            json!({"id": 55, "type": "pair.start", "auth": engineer_token}),
+            &state,
+            None,
+        );
+        assert!(!engineer_pair_start.ok, "engineer must not start pairing");
+        assert!(engineer_pair_start
+            .error
+            .as_deref()
+            .is_some_and(|msg| msg.contains("requires role admin")));
+
+        let admin_set_auth = handle_request_value(
+            json!({
+                "id": 56,
+                "type": "config.set",
+                "auth": "admin-token",
+                "params": { "control.auth_token": "new-admin-token" }
+            }),
+            &state,
+            None,
+        );
+        assert!(admin_set_auth.ok, "admin should update auth token");
+
+        let unauthorized = handle_request_value(
+            json!({"id": 57, "type": "status", "auth": "invalid-token"}),
+            &state,
+            None,
+        );
+        assert!(!unauthorized.ok);
+        assert_eq!(unauthorized.error.as_deref(), Some("unauthorized"));
+
+        let _ = std::fs::remove_file(pairing_path);
+    }
+
+    #[test]
+    fn historian_query_and_alert_control_requests_return_contract_payloads() {
+        let source = r#"
+PROGRAM Main
+VAR
+    run : BOOL := TRUE;
+END_VAR
+END_PROGRAM
+"#;
+        let mut state = hmi_test_state(source);
+        let history_path = temp_history_path("historian");
+        let hook_path = temp_history_path("hook");
+        let historian = HistorianService::new(
+            HistorianConfig {
+                enabled: true,
+                sample_interval_ms: 1,
+                mode: RecordingMode::All,
+                include: Vec::new(),
+                history_path: history_path.clone(),
+                max_entries: 500,
+                prometheus_enabled: true,
+                prometheus_path: SmolStr::new("/metrics"),
+                alerts: vec![AlertRule {
+                    name: SmolStr::new("run_high"),
+                    variable: SmolStr::new("Main.run"),
+                    above: Some(0.5),
+                    below: None,
+                    debounce_samples: 1,
+                    hook: Some(SmolStr::new(hook_path.to_string_lossy())),
+                }],
+            },
+            None,
+        )
+        .expect("historian");
+        let (snapshot_tx, snapshot_rx) = std::sync::mpsc::channel();
+        state
+            .resource
+            .send_command(ResourceCommand::Snapshot {
+                respond_to: snapshot_tx,
+            })
+            .expect("request runtime snapshot");
+        let snapshot = snapshot_rx
+            .recv_timeout(std::time::Duration::from_millis(250))
+            .expect("snapshot");
+        historian
+            .capture_snapshot_at(&snapshot, 1_000)
+            .expect("capture initial");
+        state.historian = Some(historian);
+
+        let query = handle_request_value(
+            json!({ "id": 80, "type": "historian.query", "params": { "limit": 20 } }),
+            &state,
+            None,
+        );
+        assert!(
+            query.ok,
+            "historian.query should succeed: {:?}",
+            query.error
+        );
+        let items = query
+            .result
+            .as_ref()
+            .and_then(|value| value.get("items"))
+            .and_then(serde_json::Value::as_array)
+            .expect("items");
+        assert!(!items.is_empty());
+
+        let alerts = handle_request_value(
+            json!({ "id": 81, "type": "historian.alerts", "params": { "limit": 20 } }),
+            &state,
+            None,
+        );
+        assert!(
+            alerts.ok,
+            "historian.alerts should succeed: {:?}",
+            alerts.error
+        );
+        let alert_items = alerts
+            .result
+            .as_ref()
+            .and_then(|value| value.get("items"))
+            .and_then(serde_json::Value::as_array)
+            .expect("alerts");
+        assert!(!alert_items.is_empty());
+
+        let _ = std::fs::remove_file(history_path);
+        let _ = std::fs::remove_file(hook_path);
     }
 }

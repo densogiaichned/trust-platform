@@ -32,13 +32,17 @@ dialoguer.workspace = true
 indicatif.workspace = true
 owo-colors.workspace = true
 rumqttc.workspace = true
-tiny_http = "0.12"
+tiny_http = { version = "0.12", features = ["ssl-rustls"] }
 mdns-sd = "0.10"
 base64 = "0.22"
 rand = "0.8"
 ureq = "2"
 sha2 = "0.10"
+rustls = "0.20"
+rustls-pemfile = "0.2.1"
+opcua = { version = "0.12", default-features = false, features = ["server", "client", "vendored-openssl"], optional = true }
 
 [features]
 default = ["debug"]
 debug = []
+opcua-wire = ["dep:opcua"]

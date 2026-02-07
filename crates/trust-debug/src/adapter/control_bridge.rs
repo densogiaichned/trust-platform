@@ -62,6 +62,7 @@ impl DebugControlServer {
             debug_enabled: Arc::new(AtomicBool::new(true)),
             debug_variables: Arc::new(Mutex::new(DebugVariableHandles::new())),
             hmi_live: Arc::new(Mutex::new(trust_runtime::hmi::HmiLiveState::default())),
+            historian: None,
             pairing: None,
         });
         let server = ControlServer::start(endpoint, state.clone())?;
@@ -106,6 +107,7 @@ fn default_settings(session: &dyn DebugRuntime) -> RuntimeSettings {
             enabled: false,
             listen: SmolStr::new("0.0.0.0:8080"),
             auth: SmolStr::new("local"),
+            tls: false,
         },
         DiscoverySettings {
             enabled: false,
@@ -116,6 +118,7 @@ fn default_settings(session: &dyn DebugRuntime) -> RuntimeSettings {
         MeshSettings {
             enabled: false,
             listen: SmolStr::new("0.0.0.0:5200"),
+            tls: false,
             auth_token: None,
             publish: Vec::new(),
             subscribe: IndexMap::new(),

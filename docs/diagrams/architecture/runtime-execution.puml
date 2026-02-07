@@ -167,6 +167,7 @@ package "Control + HMI Contract" as hmiPkg #Lavender {
         card "hmi.values.get\n(typed values + quality + timestamp)" as hmiValues
         card "hmi.trends.get\n(sample buffers + downsample)" as hmiTrends
         card "hmi.alarms.get / hmi.alarm.ack\n(raise -> ack -> clear + history)" as hmiAlarms
+        card "historian.query / historian.alerts\n(persistent samples + alert transitions)" as hmiHistorian
         card "hmi.write\n(disabled in read-only mode)" as hmiWrite
     }
 
@@ -176,6 +177,8 @@ package "Control + HMI Contract" as hmiPkg #Lavender {
         card "poll POST /api/control every 500 ms\n(values/trends/alarms)" as hmiPoll
         card "status badges:\nconnection + freshness" as hmiStatus
         card "GET /hmi/export.json\n(standalone assets + routes + schema config)" as hmiExport
+        card "GET /metrics\n(Prometheus scrape, auth-gated)" as hmiMetrics
+        card "transport:\nHTTP (local) or HTTPS (runtime.web.tls=true)" as hmiTransport
     }
 
     rectangle "Web IDE Preview (/ide)" as ideWeb #Wheat {
@@ -193,10 +196,13 @@ package "Control + HMI Contract" as hmiPkg #Lavender {
     hmiEmit --> hmiValues
     hmiValues --> hmiTrends
     hmiValues --> hmiAlarms
+    hmiValues --> hmiHistorian
     hmiValues --> hmiWrite
     hmiAlarms --> hmiWrite
     hmiRoute --> hmiPoll
     hmiRoute --> hmiNav
+    hmiRoute --> hmiTransport
+    hmiRoute --> hmiMetrics
     hmiPoll --> hmiStatus
     hmiPoll ..> hmiValues : request values
     hmiPoll ..> hmiTrends : request trends
@@ -211,11 +217,30 @@ package "Control + HMI Contract" as hmiPkg #Lavender {
     note right of ideWrite
         security boundary:
         • web auth required for session bootstrap
+        • optional TLS (runtime.web.tls + runtime.tls cert material)
         • X-Trust-Ide-Session required for calls
         • writes allowed only in debug mode
         • optimistic conflict check via expected_version
         • source scope limited to sources/**/*.st
     end note
+}
+
+' ============================================================
+' OPC UA INTEROP
+' ============================================================
+package "OPC UA Interop" as opcuaPkg #LightCyan {
+    rectangle "OPC UA Gateway (opcua.rs)" as opcuaFlow #Wheat {
+        card "1. Load runtime.opcua profile" as opc1
+        card "2. Bootstrap endpoint + namespace" as opc2
+        card "3. Startup probe read\n(reference client session)" as opc3
+        card "4. Poll runtime snapshot\n(refresh exposed node values)" as opc4
+        card "5. External clients\nbrowse/read/write nodes" as opc5
+    }
+
+    opc1 --> opc2
+    opc2 --> opc3
+    opc3 --> opc4
+    opc4 --> opc5
 }
 
 ' ============================================================
@@ -266,6 +291,8 @@ package "Variable Storage" as storagePkg #LightCoral {
     varStorage --> instanceData : instances
     varStorage --> memLoc
 }
+
+runtime ..> opc4 : snapshot globals
 
 ' ============================================================
 ' EVALUATION CONTEXT

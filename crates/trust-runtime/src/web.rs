@@ -24,6 +24,7 @@ use crate::discovery::DiscoveryState;
 use crate::error::RuntimeError;
 use crate::io::{IoAddress, IoSize};
 use crate::memory::IoArea;
+use crate::security::{AccessRole, TlsMaterials};
 use crate::setup::SetupOptions;
 
 mod deploy;
@@ -440,15 +441,26 @@ pub fn start_web_server(
     discovery: Option<Arc<DiscoveryState>>,
     pairing: Option<Arc<PairingStore>>,
     bundle_root: Option<PathBuf>,
+    tls_materials: Option<Arc<TlsMaterials>>,
 ) -> Result<WebServer, RuntimeError> {
     if !config.enabled {
         return Err(RuntimeError::ControlError("web disabled".into()));
     }
     let listen = config.listen.to_string();
-    let server = Server::http(&listen)
-        .map_err(|err| RuntimeError::ControlError(format!("web bind: {err}").into()))?;
+    let server = if config.tls {
+        let materials = tls_materials.as_ref().ok_or_else(|| {
+            RuntimeError::ControlError(
+                "web tls enabled but runtime.tls certificate settings are unavailable".into(),
+            )
+        })?;
+        Server::https(&listen, materials.tiny_http_ssl_config())
+            .map_err(|err| RuntimeError::ControlError(format!("web tls bind: {err}").into()))?
+    } else {
+        Server::http(&listen)
+            .map_err(|err| RuntimeError::ControlError(format!("web bind: {err}").into()))?
+    };
     let auth = config.auth;
-    let web_url = format_web_url(&listen);
+    let web_url = format_web_url(&listen, config.tls);
     let auth_token = control_state.auth_token.clone();
     let discovery = discovery.unwrap_or_else(|| Arc::new(DiscoveryState::new()));
     let pairing = pairing.or_else(|| {
@@ -562,6 +574,43 @@ pub fn start_web_server(
             if method == Method::Get && url == "/hmi/app.js" {
                 let response = Response::from_string(HMI_JS).with_header(
                     Header::from_bytes("Content-Type", "application/javascript").unwrap(),
+                );
+                let _ = request.respond(response);
+                continue;
+            }
+            if method == Method::Get
+                && control_state
+                    .historian
+                    .as_ref()
+                    .and_then(|hist| hist.prometheus_path())
+                    == Some(url.as_str())
+            {
+                let _request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Viewer,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
+                let metrics = control_state
+                    .metrics
+                    .lock()
+                    .ok()
+                    .map(|guard| guard.snapshot())
+                    .unwrap_or_default();
+                let body = control_state
+                    .historian
+                    .as_ref()
+                    .map(|service| service.render_prometheus(&metrics))
+                    .unwrap_or_else(|| crate::historian::render_prometheus(&metrics, None));
+                let response = Response::from_string(body).with_header(
+                    Header::from_bytes("Content-Type", "text/plain; version=0.0.4").unwrap(),
                 );
                 let _ = request.respond(response);
                 continue;
@@ -680,14 +729,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Post && url == "/api/setup/apply" {
-                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
-                    let response = Response::from_string(
-                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
-                    )
-                    .with_status_code(StatusCode(401));
-                    let _ = request.respond(response);
-                    continue;
-                }
+                let _request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Engineer,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let mut body = String::new();
                 if request.as_reader().read_to_string(&mut body).is_err() {
                     let response = Response::from_string("invalid body").with_status_code(400);
@@ -724,14 +778,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Post && url == "/api/io/config" {
-                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
-                    let response = Response::from_string(
-                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
-                    )
-                    .with_status_code(StatusCode(401));
-                    let _ = request.respond(response);
-                    continue;
-                }
+                let _request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Engineer,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let mut body = String::new();
                 if request.as_reader().read_to_string(&mut body).is_err() {
                     let response = Response::from_string("invalid body").with_status_code(400);
@@ -780,14 +839,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Post && url == "/api/io/modbus-test" {
-                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
-                    let response = Response::from_string(
-                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
-                    )
-                    .with_status_code(StatusCode(401));
-                    let _ = request.respond(response);
-                    continue;
-                }
+                let _request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Viewer,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let mut body = String::new();
                 if request.as_reader().read_to_string(&mut body).is_err() {
                     let response = Response::from_string("invalid body").with_status_code(400);
@@ -896,14 +960,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Get && url == "/api/ide/capabilities" {
-                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
-                    let response = Response::from_string(
-                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
-                    )
-                    .with_status_code(StatusCode(401));
-                    let _ = request.respond(response);
-                    continue;
-                }
+                let _request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Viewer,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let caps = ide_state.capabilities(ide_write_enabled(&control_state));
                 let response =
                     Response::from_string(json!({ "ok": true, "result": caps }).to_string())
@@ -914,14 +983,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Post && url == "/api/ide/session" {
-                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
-                    let response = Response::from_string(
-                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
-                    )
-                    .with_status_code(StatusCode(401));
-                    let _ = request.respond(response);
-                    continue;
-                }
+                let _request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Viewer,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let mut body = String::new();
                 if request.as_reader().read_to_string(&mut body).is_err() {
                     let response = Response::from_string(
@@ -1090,6 +1164,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Get && url == "/api/pairings" {
+                let _request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Admin,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let list = pairing
                     .as_ref()
                     .map(|store| store.list())
@@ -1101,6 +1188,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Post && url == "/api/pair/start" {
+                let _request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Admin,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let body = if let Some(store) = pairing.as_ref() {
                     let code = store.start_pairing();
                     json!({
@@ -1137,8 +1237,15 @@ pub fn start_web_server(
                     }
                 };
                 let code = payload.get("code").and_then(|value| value.as_str());
-                let token =
-                    code.and_then(|value| pairing.as_ref().and_then(|store| store.claim(value)));
+                let requested_role = payload
+                    .get("role")
+                    .and_then(|value| value.as_str())
+                    .and_then(AccessRole::parse);
+                let token = code.and_then(|value| {
+                    pairing
+                        .as_ref()
+                        .and_then(|store| store.claim(value, requested_role))
+                });
                 let body = if let Some(token) = token {
                     json!({ "token": token })
                 } else {
@@ -1150,14 +1257,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Get && url == "/api/invite" {
-                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
-                    let response = Response::from_string(
-                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
-                    )
-                    .with_status_code(StatusCode(401));
-                    let _ = request.respond(response);
-                    continue;
-                }
+                let _request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Admin,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let token = auth_token
                     .lock()
                     .ok()
@@ -1173,11 +1285,25 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Get && url.starts_with("/api/events") {
+                let request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Viewer,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let limit = parse_limit(&url).unwrap_or(50);
-                let response = handle_request_value(
+                let response = dispatch_control_request(
                     json!({ "id": 1, "type": "events.tail", "params": { "limit": limit } }),
                     &control_state,
                     Some("web"),
+                    request_token.as_deref(),
                 );
                 let body = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
                 let response = Response::from_string(body)
@@ -1186,11 +1312,25 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Get && url.starts_with("/api/faults") {
+                let request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Viewer,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let limit = parse_limit(&url).unwrap_or(50);
-                let response = handle_request_value(
+                let response = dispatch_control_request(
                     json!({ "id": 1, "type": "faults", "params": { "limit": limit } }),
                     &control_state,
                     Some("web"),
+                    request_token.as_deref(),
                 );
                 let body = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
                 let response = Response::from_string(body)
@@ -1199,14 +1339,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Post && url == "/api/deploy" {
-                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
-                    let response = Response::from_string(
-                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
-                    )
-                    .with_status_code(StatusCode(401));
-                    let _ = request.respond(response);
-                    continue;
-                }
+                let request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Admin,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let mut body = String::new();
                 if request.as_reader().read_to_string(&mut body).is_err() {
                     let response = Response::from_string(
@@ -1239,10 +1384,11 @@ pub fn start_web_server(
                 let body = match result {
                     Ok(result) => {
                         if let Some(restart) = result.restart.as_ref() {
-                            let _ = handle_request_value(
+                            let _ = dispatch_control_request(
                                 json!({ "id": 1, "type": "restart", "params": { "mode": restart } }),
                                 &control_state,
                                 Some("web"),
+                                request_token.as_deref(),
                             );
                         }
                         json!({ "ok": true, "written": result.written, "restart": result.restart })
@@ -1255,14 +1401,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Post && url == "/api/rollback" {
-                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
-                    let response = Response::from_string(
-                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
-                    )
-                    .with_status_code(StatusCode(401));
-                    let _ = request.respond(response);
-                    continue;
-                }
+                let request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Admin,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let mut body = String::new();
                 if request.as_reader().read_to_string(&mut body).is_err() {
                     let response = Response::from_string(
@@ -1290,10 +1441,11 @@ pub fn start_web_server(
                 let body = match result {
                     Ok(result) => {
                         if let Some(restart) = payload.restart.as_ref() {
-                            let _ = handle_request_value(
+                            let _ = dispatch_control_request(
                                 json!({ "id": 1, "type": "restart", "params": { "mode": restart } }),
                                 &control_state,
                                 Some("web"),
+                                request_token.as_deref(),
                             );
                         }
                         json!({
@@ -1310,14 +1462,19 @@ pub fn start_web_server(
                 continue;
             }
             if method == Method::Post && url == "/api/control" {
-                if !check_auth(&request, auth, &auth_token, pairing.as_deref()) {
-                    let response = Response::from_string(
-                        json!({ "ok": false, "error": "unauthorized" }).to_string(),
-                    )
-                    .with_status_code(StatusCode(401));
-                    let _ = request.respond(response);
-                    continue;
-                }
+                let request_token = match check_auth(
+                    &request,
+                    auth,
+                    &auth_token,
+                    pairing.as_deref(),
+                    AccessRole::Viewer,
+                ) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        let _ = request.respond(auth_error_response(error));
+                        continue;
+                    }
+                };
                 let mut body = String::new();
                 if request.as_reader().read_to_string(&mut body).is_err() {
                     let response = Response::from_string(
@@ -1338,7 +1495,12 @@ pub fn start_web_server(
                         continue;
                     }
                 };
-                let response = handle_request_value(payload, &control_state, Some("web"));
+                let response = dispatch_control_request(
+                    payload,
+                    &control_state,
+                    Some("web"),
+                    request_token.as_deref(),
+                );
                 let body = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
                 let response = Response::from_string(body)
                     .with_header(Header::from_bytes("Content-Type", "application/json").unwrap());
@@ -1358,9 +1520,25 @@ fn check_auth(
     auth_mode: WebAuthMode,
     token: &Arc<Mutex<Option<smol_str::SmolStr>>>,
     pairing: Option<&PairingStore>,
-) -> bool {
+    required_role: AccessRole,
+) -> Result<Option<String>, &'static str> {
+    let Some((role, request_token)) = resolve_web_role(request, auth_mode, token, pairing) else {
+        return Err("unauthorized");
+    };
+    if !role.allows(required_role) {
+        return Err("forbidden");
+    }
+    Ok(request_token)
+}
+
+fn resolve_web_role(
+    request: &tiny_http::Request,
+    auth_mode: WebAuthMode,
+    token: &Arc<Mutex<Option<smol_str::SmolStr>>>,
+    pairing: Option<&PairingStore>,
+) -> Option<(AccessRole, Option<String>)> {
     if matches!(auth_mode, WebAuthMode::Local) {
-        return true;
+        return Some((AccessRole::Admin, None));
     }
     let expected = token.lock().ok().and_then(|guard| guard.as_ref().cloned());
     let header = request
@@ -1370,16 +1548,38 @@ fn check_auth(
         .map(|header| header.value.as_str().to_string());
     if let Some(expected) = expected {
         if header.as_deref() == Some(expected.as_str()) {
-            return true;
+            return Some((AccessRole::Admin, header));
         }
     }
-    let Some(header) = header else {
-        return false;
-    };
+    let header = header?;
     pairing
         .as_ref()
-        .map(|store| store.validate(header.as_str()))
-        .unwrap_or(false)
+        .and_then(|store| store.validate_with_role(header.as_str()))
+        .map(|role| (role, Some(header)))
+}
+
+fn auth_error_response(error: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    let status = if error == "forbidden" {
+        StatusCode(403)
+    } else {
+        StatusCode(401)
+    };
+    Response::from_string(json!({ "ok": false, "error": error }).to_string())
+        .with_status_code(status)
+}
+
+fn dispatch_control_request(
+    mut payload: serde_json::Value,
+    control_state: &ControlState,
+    client: Option<&str>,
+    request_token: Option<&str>,
+) -> crate::control::ControlResponse {
+    if payload.get("auth").is_none() {
+        if let Some(token) = request_token {
+            payload["auth"] = serde_json::Value::String(token.to_string());
+        }
+    }
+    handle_request_value(payload, control_state, client)
 }
 
 fn ide_session_token(request: &tiny_http::Request) -> Option<String> {
@@ -1408,11 +1608,12 @@ fn ide_error_response(error: IdeError) -> Response<std::io::Cursor<Vec<u8>>> {
         .with_header(Header::from_bytes("Content-Type", "application/json").unwrap())
 }
 
-fn format_web_url(listen: &str) -> String {
+fn format_web_url(listen: &str, tls: bool) -> String {
     let host = listen.split(':').next().unwrap_or("localhost");
     let port = listen.rsplit(':').next().unwrap_or("8080");
     let host = if host == "0.0.0.0" { "localhost" } else { host };
-    format!("http://{host}:{port}")
+    let scheme = if tls { "https" } else { "http" };
+    format!("{scheme}://{host}:{port}")
 }
 
 fn render_qr_svg(text: &str) -> Result<String, RuntimeError> {

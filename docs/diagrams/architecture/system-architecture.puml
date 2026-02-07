@@ -149,10 +149,14 @@ package "trust-runtime crate" as struntime #LightYellow {
     component "RetainManager" as retainMgr
     component "Watchdog" as watchdog
     component "Control Server\n(IPC)" as controlServer
-    component "Web UI Server\n(HTTP)" as webServer
+    component "Web UI Server\n(HTTP/HTTPS)" as webServer
     component "Web IDE State\n(Session + Versioning)" as webIde
     component "Discovery\n(mDNS)" as discovery
-    component "Mesh Sync\n(Peer Data)" as meshSync
+    component "Mesh Sync\n(Peer Data, TCP/TLS)" as meshSync
+    component "TLS Materials\n(cert/key/ca)" as tlsMaterials
+    component "Historian Service\n(recording + alerts + hooks)" as historianSvc
+    component "Prometheus Scrape\n(/metrics)" as promScrape
+    component "OPC UA Gateway\n(server + probe client)" as opcuaGateway
 
     package "eval/" as eval {
         component "Stmt" as stmtAst <<eval/stmt.rs:30-95>>
@@ -186,15 +190,27 @@ package "trust-runtime crate" as struntime #LightYellow {
     launcher --> retainMgr
     launcher --> runtime
     runtimeConfig --> runtime
+    runtimeConfig --> tlsMaterials : runtime.tls
+    runtimeConfig --> historianSvc : runtime.observability
+    runtimeConfig --> opcuaGateway : runtime.opcua
+    tlsMaterials --> webServer : runtime.web.tls
+    tlsMaterials --> meshSync : runtime.mesh.tls
     launcher --> controlServer : starts
     launcher --> webServer : starts (if enabled)
     launcher --> discovery : advertises (if enabled)
     launcher --> meshSync : starts (if enabled)
+    launcher --> historianSvc : starts sampler\n(if enabled)
+    launcher --> opcuaGateway : starts (if enabled)
     controlServer --> runtime : pause/step/io
+    controlServer --> historianSvc : historian.query/alerts
     runtime --> retainMgr : retain lifecycle
     webServer --> controlServer : status/control
+    webServer --> promScrape : GET /metrics
+    promScrape --> historianSvc : scrape data
+    promScrape --> runtime : metrics snapshot
     webServer --> webIde : /api/ide/*
     meshSync --> runtime : publish/subscribe
+    opcuaGateway --> runtime : snapshot poll / node updates
 }
 
 ' ============================================================
@@ -223,6 +239,7 @@ package "Deployment" as deploy #LightGray {
     component "CLI Control Client\n(trust-runtime ctl)" as ctlClient
     component "Browser UI\n(Local/Remote)" as browserUi
     component "Peer Runtime\n(Other PLC)" as peerRuntime
+    component "OPC UA Clients\n(SCADA/MES/Historian)" as opcuaClients
 }
 
 ' ============================================================
@@ -263,9 +280,10 @@ systemIo --> launcher : load (fallback)
 retainMgr --> retainStore : load/save
 runtime --> hardwareIo : drivers
 ctlClient --> controlServer : JSON IPC
-browserUi --> webServer : HTTP (/hmi, /ide, /api/*)
+browserUi --> webServer : HTTP/HTTPS (/hmi, /ide, /api/*)
 discovery --> browserUi : mDNS advertise
-meshSync --> peerRuntime : peer link
+meshSync --> peerRuntime : peer link (token + optional TLS)
+opcuaClients --> opcuaGateway : browse/read/write
 
 ' ============================================================
 ' LEGEND

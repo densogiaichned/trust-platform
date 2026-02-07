@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![allow(clippy::module_name_repetitions)]
+#![recursion_limit = "512"]
 
 /// Bundle discovery helpers.
 pub mod bundle;
@@ -27,6 +28,8 @@ pub mod error;
 pub mod eval;
 /// Test harness for runtime execution.
 pub mod harness;
+/// Historian, alerts, and Prometheus observability helpers.
+pub mod historian;
 /// HMI schema and value contract helpers.
 pub mod hmi;
 /// FB/Class instance management.
@@ -40,6 +43,8 @@ pub mod mesh;
 /// Runtime metrics collection.
 pub mod metrics;
 mod numeric;
+/// OPC UA profile and IEC-to-OPC UA mapping helpers.
+pub mod opcua;
 /// PLCopen XML import/export helpers (strict subset profile).
 pub mod plcopen;
 /// Local package registry contracts and workflows.
@@ -48,6 +53,8 @@ pub mod registry;
 pub mod retain;
 /// Resource scheduling helpers and clocks.
 pub mod scheduler;
+/// Security roles and authorization helpers.
+pub mod security;
 /// Runtime settings snapshot.
 pub mod settings;
 /// System setup helpers (writes system IO config).

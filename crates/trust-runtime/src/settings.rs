@@ -18,6 +18,7 @@ pub struct RuntimeSettings {
     pub web: WebSettings,
     pub discovery: DiscoverySettings,
     pub mesh: MeshSettings,
+    pub opcua: OpcUaSettings,
     pub simulation: SimulationSettings,
 }
 
@@ -38,6 +39,7 @@ impl RuntimeSettings {
             web,
             discovery,
             mesh,
+            opcua: OpcUaSettings::default(),
             simulation,
         }
     }
@@ -57,6 +59,7 @@ pub struct WebSettings {
     pub enabled: bool,
     pub listen: SmolStr,
     pub auth: SmolStr,
+    pub tls: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -71,9 +74,43 @@ pub struct DiscoverySettings {
 pub struct MeshSettings {
     pub enabled: bool,
     pub listen: SmolStr,
+    pub tls: bool,
     pub auth_token: Option<SmolStr>,
     pub publish: Vec<SmolStr>,
     pub subscribe: IndexMap<SmolStr, SmolStr>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpcUaSettings {
+    pub enabled: bool,
+    pub listen: SmolStr,
+    pub endpoint_path: SmolStr,
+    pub namespace_uri: SmolStr,
+    pub publish_interval_ms: u64,
+    pub max_nodes: usize,
+    pub expose: Vec<SmolStr>,
+    pub security_policy: SmolStr,
+    pub security_mode: SmolStr,
+    pub allow_anonymous: bool,
+    pub username_set: bool,
+}
+
+impl Default for OpcUaSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: SmolStr::new("0.0.0.0:4840"),
+            endpoint_path: SmolStr::new("/"),
+            namespace_uri: SmolStr::new("urn:trust:runtime"),
+            publish_interval_ms: 250,
+            max_nodes: 128,
+            expose: Vec::new(),
+            security_policy: SmolStr::new("basic256sha256"),
+            security_mode: SmolStr::new("sign_and_encrypt"),
+            allow_anonymous: false,
+            username_set: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

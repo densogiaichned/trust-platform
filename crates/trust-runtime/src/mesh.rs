@@ -11,6 +11,7 @@ use std::thread;
 use std::time::Duration as StdDuration;
 
 use indexmap::IndexMap;
+use rustls::{ClientConnection, ServerConnection, ServerName, StreamOwned};
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
@@ -18,6 +19,7 @@ use crate::config::MeshConfig;
 use crate::discovery::DiscoveryState;
 use crate::error::RuntimeError;
 use crate::scheduler::{ResourceCommand, ResourceControl, StdClock};
+use crate::security::{rustls_client_config, rustls_server_config, TlsMaterials};
 use crate::value::Value;
 
 #[derive(Debug)]
@@ -41,6 +43,7 @@ struct MeshState {
     subscribe: IndexMap<SmolStr, SmolStr>,
     discovery: Option<Arc<DiscoveryState>>,
     resource: ResourceControl<StdClock>,
+    tls: Option<Arc<MeshTlsTransport>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,16 +54,36 @@ struct MeshMessage {
     data: Option<BTreeMap<String, serde_json::Value>>,
 }
 
+#[derive(Debug)]
+struct MeshTlsTransport {
+    server_config: Arc<rustls::ServerConfig>,
+    client_config: Arc<rustls::ClientConfig>,
+}
+
 pub fn start_mesh(
     config: &MeshConfig,
     name: SmolStr,
     resource: ResourceControl<StdClock>,
     discovery: Option<Arc<DiscoveryState>>,
+    tls_materials: Option<Arc<TlsMaterials>>,
 ) -> Result<Option<MeshService>, RuntimeError> {
     if !config.enabled {
         return Ok(None);
     }
     let listen = parse_addr(&config.listen)?;
+    let tls = if config.tls {
+        let materials = tls_materials.as_ref().ok_or_else(|| {
+            RuntimeError::ControlError(
+                "mesh tls enabled but runtime.tls certificate settings are unavailable".into(),
+            )
+        })?;
+        Some(Arc::new(MeshTlsTransport {
+            server_config: rustls_server_config(materials)?,
+            client_config: rustls_client_config(materials)?,
+        }))
+    } else {
+        None
+    };
     let state = MeshState {
         name,
         auth_token: config.auth_token.clone(),
@@ -68,6 +91,7 @@ pub fn start_mesh(
         subscribe: config.subscribe.clone(),
         discovery,
         resource,
+        tls,
     };
 
     let listener_state = state.clone();
@@ -75,7 +99,14 @@ pub fn start_mesh(
         if let Ok(listener) = TcpListener::bind(listen) {
             for stream in listener.incoming().map_while(Result::ok) {
                 let state = listener_state.clone();
-                thread::spawn(move || handle_peer(stream, state));
+                let tls_server_config = state.tls.as_ref().map(|tls| tls.server_config.clone());
+                thread::spawn(move || {
+                    if let Some(server_config) = tls_server_config {
+                        handle_peer_tls(stream, state, server_config);
+                    } else {
+                        handle_peer(stream, state);
+                    }
+                });
             }
         }
     });
@@ -123,6 +154,9 @@ fn send_publish(
     state: &MeshState,
     data: &BTreeMap<String, serde_json::Value>,
 ) -> Result<(), RuntimeError> {
+    if let Some(tls) = state.tls.as_ref() {
+        return send_publish_tls(target, state, data, tls.client_config.clone());
+    }
     let mut stream = TcpStream::connect(target).map_err(|err| {
         RuntimeError::ControlError(format!("mesh connect {target}: {err}").into())
     })?;
@@ -140,6 +174,19 @@ fn send_publish(
 
 fn handle_peer(stream: TcpStream, state: MeshState) {
     let reader = BufReader::new(stream);
+    handle_peer_stream(reader, state);
+}
+
+fn handle_peer_tls(stream: TcpStream, state: MeshState, server_config: Arc<rustls::ServerConfig>) {
+    let connection = match ServerConnection::new(server_config) {
+        Ok(connection) => connection,
+        Err(_) => return,
+    };
+    let reader = BufReader::new(StreamOwned::new(connection, stream));
+    handle_peer_stream(reader, state);
+}
+
+fn handle_peer_stream<R: std::io::Read>(reader: BufReader<R>, state: MeshState) {
     for line in reader.lines().map_while(Result::ok) {
         let Ok(msg) = serde_json::from_str::<MeshMessage>(&line) else {
             continue;
@@ -161,6 +208,39 @@ fn handle_peer(stream: TcpStream, state: MeshState) {
             .resource
             .send_command(ResourceCommand::MeshApply { updates });
     }
+}
+
+fn send_publish_tls(
+    target: &SocketAddr,
+    state: &MeshState,
+    data: &BTreeMap<String, serde_json::Value>,
+    client_config: Arc<rustls::ClientConfig>,
+) -> Result<(), RuntimeError> {
+    let stream = TcpStream::connect(target).map_err(|err| {
+        RuntimeError::ControlError(format!("mesh connect {target}: {err}").into())
+    })?;
+    let server_name = mesh_server_name(target)?;
+    let connection = ClientConnection::new(client_config, server_name)
+        .map_err(|err| RuntimeError::ControlError(format!("mesh tls connect: {err}").into()))?;
+    let mut stream = StreamOwned::new(connection, stream);
+    let msg = MeshMessage {
+        r#type: "publish".into(),
+        from: state.name.to_string(),
+        token: state.auth_token.as_ref().map(|t| t.to_string()),
+        data: Some(data.clone()),
+    };
+    let line = serde_json::to_string(&msg).unwrap_or_default();
+    writeln!(stream, "{line}")
+        .map_err(|err| RuntimeError::ControlError(format!("mesh tls send: {err}").into()))?;
+    stream
+        .flush()
+        .map_err(|err| RuntimeError::ControlError(format!("mesh tls flush: {err}").into()))
+}
+
+fn mesh_server_name(target: &SocketAddr) -> Result<ServerName, RuntimeError> {
+    let _ = target;
+    ServerName::try_from("localhost")
+        .map_err(|_| RuntimeError::ControlError("mesh tls invalid server name".into()))
 }
 
 fn map_subscribe(
@@ -283,6 +363,12 @@ fn parse_addr(text: &SmolStr) -> Result<SocketAddr, RuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+    use std::time::Duration as StdDuration;
+
+    use crate::security::TlsMaterials;
     use serde_json::json;
 
     #[test]
@@ -299,5 +385,149 @@ mod tests {
         let template = Value::Bool(false);
         let json_value = json!("not-bool");
         assert!(json_to_value(&json_value, &template).is_none());
+    }
+
+    #[test]
+    fn mesh_tls_publish_applies_updates() {
+        let tls = tls_test_transport();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind tls mesh listener");
+        let addr = listener.local_addr().expect("tls mesh addr");
+        let (resource, cmd_rx) = ResourceControl::stub(StdClock::new());
+        let (apply_tx, apply_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(command) = cmd_rx.recv() {
+                match command {
+                    ResourceCommand::MeshSnapshot { names, respond_to } => {
+                        let mut values = IndexMap::new();
+                        for name in names {
+                            values.insert(name, Value::DInt(0));
+                        }
+                        let _ = respond_to.send(values);
+                    }
+                    ResourceCommand::MeshApply { updates } => {
+                        let _ = apply_tx.send(updates);
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        let listener_state = MeshState {
+            name: SmolStr::new("listener"),
+            auth_token: Some(SmolStr::new("mesh-token")),
+            publish: Vec::new(),
+            subscribe: IndexMap::from([(
+                SmolStr::new("peer:temperature"),
+                SmolStr::new("resource/RESOURCE/program/Main/field/temp"),
+            )]),
+            discovery: None,
+            resource,
+            tls: Some(tls.clone()),
+        };
+
+        let server_config = tls.server_config.clone();
+        let listener_thread = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept mesh tls client");
+            handle_peer_tls(stream, listener_state, server_config);
+        });
+
+        let (sender_resource, _sender_rx) = ResourceControl::stub(StdClock::new());
+        let sender_state = MeshState {
+            name: SmolStr::new("peer"),
+            auth_token: Some(SmolStr::new("mesh-token")),
+            publish: Vec::new(),
+            subscribe: IndexMap::new(),
+            discovery: None,
+            resource: sender_resource,
+            tls: Some(tls.clone()),
+        };
+        let mut data = BTreeMap::new();
+        data.insert("temperature".to_string(), json!(42));
+
+        send_publish(&addr, &sender_state, &data).expect("send mesh tls publish");
+        let updates = apply_rx
+            .recv_timeout(StdDuration::from_millis(400))
+            .expect("mesh apply updates");
+        assert_eq!(
+            updates.get("resource/RESOURCE/program/Main/field/temp"),
+            Some(&Value::DInt(42))
+        );
+
+        listener_thread.join().expect("join mesh tls listener");
+    }
+
+    #[test]
+    fn mesh_tls_rejects_plaintext_downgrade() {
+        let tls = tls_test_transport();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind tls mesh listener");
+        let addr = listener.local_addr().expect("tls mesh addr");
+        let (resource, cmd_rx) = ResourceControl::stub(StdClock::new());
+        let (apply_tx, apply_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            while let Ok(command) = cmd_rx.recv() {
+                if let ResourceCommand::MeshApply { updates } = command {
+                    let _ = apply_tx.send(updates);
+                }
+            }
+        });
+
+        let listener_state = MeshState {
+            name: SmolStr::new("listener"),
+            auth_token: Some(SmolStr::new("mesh-token")),
+            publish: Vec::new(),
+            subscribe: IndexMap::from([(
+                SmolStr::new("peer:temperature"),
+                SmolStr::new("resource/RESOURCE/program/Main/field/temp"),
+            )]),
+            discovery: None,
+            resource,
+            tls: Some(tls.clone()),
+        };
+
+        let server_config = tls.server_config.clone();
+        let listener_thread = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept mesh plain client");
+            handle_peer_tls(stream, listener_state, server_config);
+        });
+
+        let mut plain = TcpStream::connect(addr).expect("connect plain mesh client");
+        let write_result = writeln!(
+            plain,
+            "{}",
+            json!({
+                "type": "publish",
+                "from": "peer",
+                "token": "mesh-token",
+                "data": { "temperature": 42 }
+            })
+        );
+        if write_result.is_ok() {
+            let _ = plain.flush();
+        }
+        std::thread::sleep(StdDuration::from_millis(120));
+        assert!(apply_rx
+            .recv_timeout(StdDuration::from_millis(120))
+            .is_err());
+
+        listener_thread.join().expect("join mesh tls listener");
+    }
+
+    fn tls_test_transport() -> Arc<MeshTlsTransport> {
+        let cert = include_bytes!("../tests/fixtures/tls/server-cert.pem").to_vec();
+        let key = include_bytes!("../tests/fixtures/tls/server-key.pem").to_vec();
+        let materials = TlsMaterials {
+            cert_path: std::path::PathBuf::from("tests/fixtures/tls/server-cert.pem"),
+            key_path: std::path::PathBuf::from("tests/fixtures/tls/server-key.pem"),
+            ca_path: Some(std::path::PathBuf::from(
+                "tests/fixtures/tls/server-cert.pem",
+            )),
+            certificate_pem: cert.clone(),
+            private_key_pem: key,
+            ca_pem: cert,
+        };
+        Arc::new(MeshTlsTransport {
+            server_config: rustls_server_config(&materials).expect("mesh tls server config"),
+            client_config: rustls_client_config(&materials).expect("mesh tls client config"),
+        })
     }
 }
