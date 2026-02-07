@@ -14,6 +14,7 @@ participant "VS Code\nClient" as client #LightBlue
 participant "tower-lsp\nServer" as server #LightGreen
 participant "StLanguageServer" as lsp <<main.rs:16>>
 participant "ServerState" as state <<state.rs:40>>
+participant "ServerContext\n(trait)" as context
 participant "handlers/*" as handlers
 participant "Project" as project
 participant "trust-ide" as ide
@@ -144,6 +145,30 @@ end
 handlers --> lsp
 deactivate handlers
 deactivate lsp
+
+' ============================================================
+' EXECUTE COMMAND SEQUENCE
+' ============================================================
+
+== Execute Command ==
+
+client -> server : workspace/executeCommand
+server -> lsp : execute_command(params)
+activate lsp
+lsp -> handlers : execute_command(client, state, params)
+activate handlers
+handlers -> context : project_info_value_with_context(...)\nnamespace_move_workspace_edit_with_context(...)
+activate context
+context -> state : workspace_configs()/workspace_config_for_uri()
+context -> state : get_document()/document_for_file_id()
+context -> state : with_database(|db| rename(...)) [moveNamespace]
+context --> handlers
+deactivate context
+handlers -> client : workspace/applyEdit [moveNamespace]
+handlers --> lsp : command response value
+deactivate handlers
+deactivate lsp
+server --> client
 
 ' ============================================================
 ' DOCUMENT SYMBOLS SEQUENCE

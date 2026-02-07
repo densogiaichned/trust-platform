@@ -4,6 +4,7 @@
 
 mod commands;
 mod config;
+mod context;
 mod diagnostics;
 mod features;
 mod formatting;

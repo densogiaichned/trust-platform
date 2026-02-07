@@ -5,8 +5,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use tower_lsp::lsp_types::{
     CreateFile, CreateFileOptions, DeleteFile, DeleteFileOptions, DocumentChangeOperation,
-    DocumentChanges, ExecuteCommandParams, Position, Range, ResourceOp, TextDocumentEdit,
-    TextDocumentIdentifier, TextEdit, Url, WorkspaceEdit,
+    DocumentChanges, ExecuteCommandParams, OptionalVersionedTextDocumentIdentifier, Position,
+    Range, ResourceOp, TextDocumentEdit, TextDocumentIdentifier, TextEdit, Url, WorkspaceEdit,
 };
 use tower_lsp::Client;
 
@@ -16,9 +16,8 @@ use trust_ide::rename::{RenameResult, TextEdit as IdeTextEdit};
 use trust_syntax::parser::parse;
 use trust_syntax::syntax::{SyntaxKind, SyntaxNode};
 
-use crate::handlers::lsp_utils::{
-    offset_to_position, position_to_offset, text_document_identifier_for_edit,
-};
+use crate::handlers::context::ServerContext;
+use crate::handlers::lsp_utils::{offset_to_position, position_to_offset};
 use crate::library_graph::build_library_graph;
 use crate::state::{path_to_uri, uri_to_path, ServerState};
 
@@ -67,7 +66,14 @@ fn parse_move_namespace_args(args: Vec<Value>) -> Option<MoveNamespaceCommandArg
 }
 
 pub(crate) fn project_info_value(state: &ServerState, args: Vec<Value>) -> Option<Value> {
-    let mut configs = state.workspace_configs();
+    project_info_value_with_context(state, args)
+}
+
+fn project_info_value_with_context<C: ServerContext>(
+    context: &C,
+    args: Vec<Value>,
+) -> Option<Value> {
+    let mut configs = context.workspace_configs();
     if args.len() == 1 {
         if let Ok(parsed) = serde_json::from_value::<ProjectInfoCommandArgs>(
             args.into_iter().next().unwrap_or(Value::Null),
@@ -75,7 +81,7 @@ pub(crate) fn project_info_value(state: &ServerState, args: Vec<Value>) -> Optio
             if let Some(root_uri) = parsed.root_uri {
                 configs.retain(|(root, _)| root == &root_uri);
             } else if let Some(text_document) = parsed.text_document {
-                if let Some(config) = state.workspace_config_for_uri(&text_document.uri) {
+                if let Some(config) = context.workspace_config_for_uri(&text_document.uri) {
                     let root_uri = path_to_uri(&config.root).unwrap_or(text_document.uri.clone());
                     configs = vec![(root_uri, config)];
                 }
@@ -147,8 +153,15 @@ pub(crate) fn namespace_move_workspace_edit(
     state: &ServerState,
     args: MoveNamespaceCommandArgs,
 ) -> Option<WorkspaceEdit> {
+    namespace_move_workspace_edit_with_context(state, args)
+}
+
+fn namespace_move_workspace_edit_with_context<C: ServerContext>(
+    context: &C,
+    args: MoveNamespaceCommandArgs,
+) -> Option<WorkspaceEdit> {
     let uri = &args.text_document.uri;
-    let doc = state.get_document(uri)?;
+    let doc = context.get_document(uri)?;
     let offset = position_to_offset(&doc.content, args.position)?;
     let parsed = parse(&doc.content);
     let root = parsed.syntax();
@@ -161,12 +174,10 @@ pub(crate) fn namespace_move_workspace_edit(
     let new_path_parts = parse_namespace_path(&args.new_path)?;
     let target_uri = match args.target_uri {
         Some(uri) => uri,
-        None => derive_target_uri(state, &new_path_parts)?,
+        None => derive_target_uri(context, &new_path_parts)?,
     };
 
-    let mut rename_result = state.with_database(|db| {
-        trust_ide::rename(db, doc.file_id, TextSize::from(offset), &args.new_path)
-    })?;
+    let mut rename_result = context.rename(doc.file_id, TextSize::from(offset), &args.new_path)?;
 
     let relocating = uri != &target_uri;
     let mut updated_namespace_text = namespace_text;
@@ -190,7 +201,7 @@ pub(crate) fn namespace_move_workspace_edit(
     }
 
     let mut text_changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-    add_rename_edits_to_changes(state, rename_result, &mut text_changes);
+    add_rename_edits_to_changes(context, rename_result, &mut text_changes);
 
     let mut delete_source = false;
     if relocating {
@@ -215,7 +226,7 @@ pub(crate) fn namespace_move_workspace_edit(
         text_changes.remove(uri);
     }
 
-    let target_content = load_document_content(state, &target_uri).unwrap_or_default();
+    let target_content = load_document_content(context, &target_uri).unwrap_or_default();
     if relocating {
         let insert_offset = target_content.len() as u32;
         let insert_pos = offset_to_position(&target_content, insert_offset);
@@ -234,7 +245,7 @@ pub(crate) fn namespace_move_workspace_edit(
     }
 
     let mut document_changes = Vec::new();
-    let create_target = relocating && !uri_exists(state, &target_uri);
+    let create_target = relocating && !uri_exists(context, &target_uri);
     if create_target {
         document_changes.push(DocumentChangeOperation::Op(ResourceOp::Create(
             CreateFile {
@@ -250,7 +261,7 @@ pub(crate) fn namespace_move_workspace_edit(
 
     if let Some(edits) = text_changes.remove(&target_uri) {
         document_changes.push(DocumentChangeOperation::Edit(TextDocumentEdit {
-            text_document: text_document_identifier_for_edit(state, &target_uri),
+            text_document: text_document_identifier_for_context(context, &target_uri),
             edits: edits
                 .into_iter()
                 .map(tower_lsp::lsp_types::OneOf::Left)
@@ -260,7 +271,7 @@ pub(crate) fn namespace_move_workspace_edit(
 
     for (uri, edits) in text_changes {
         document_changes.push(DocumentChangeOperation::Edit(TextDocumentEdit {
-            text_document: text_document_identifier_for_edit(state, &uri),
+            text_document: text_document_identifier_for_context(context, &uri),
             edits: edits
                 .into_iter()
                 .map(tower_lsp::lsp_types::OneOf::Left)
@@ -289,12 +300,12 @@ pub(crate) fn namespace_move_workspace_edit(
 }
 
 fn add_rename_edits_to_changes(
-    state: &ServerState,
+    context: &impl ServerContext,
     rename_result: RenameResult,
     changes: &mut HashMap<Url, Vec<TextEdit>>,
 ) {
     for (file_id, edits) in rename_result.edits {
-        let Some(doc) = state.document_for_file_id(file_id) else {
+        let Some(doc) = context.document_for_file_id(file_id) else {
             continue;
         };
         let uri = doc.uri.clone();
@@ -311,8 +322,8 @@ fn add_rename_edits_to_changes(
     }
 }
 
-fn uri_exists(state: &ServerState, uri: &Url) -> bool {
-    if state.get_document(uri).is_some() {
+fn uri_exists(context: &impl ServerContext, uri: &Url) -> bool {
+    if context.get_document(uri).is_some() {
         return true;
     }
     if let Some(path) = uri_to_path(uri) {
@@ -321,19 +332,19 @@ fn uri_exists(state: &ServerState, uri: &Url) -> bool {
     false
 }
 
-fn load_document_content(state: &ServerState, uri: &Url) -> Option<String> {
-    if let Some(doc) = state.get_document(uri) {
+fn load_document_content(context: &impl ServerContext, uri: &Url) -> Option<String> {
+    if let Some(doc) = context.get_document(uri) {
         return Some(doc.content);
     }
     let path = uri_to_path(uri)?;
     std::fs::read_to_string(path).ok()
 }
 
-fn derive_target_uri(state: &ServerState, parts: &[smol_str::SmolStr]) -> Option<Url> {
+fn derive_target_uri(context: &impl ServerContext, parts: &[smol_str::SmolStr]) -> Option<Url> {
     if parts.is_empty() {
         return None;
     }
-    let root = state.workspace_folders().into_iter().next()?;
+    let root = context.workspace_folders().into_iter().next()?;
     let mut target = root.clone();
     let file_name = format!("{}.st", parts.last()?.as_str());
     {
@@ -345,6 +356,20 @@ fn derive_target_uri(state: &ServerState, parts: &[smol_str::SmolStr]) -> Option
         segments.push(&file_name);
     }
     Some(target)
+}
+
+fn text_document_identifier_for_context(
+    context: &impl ServerContext,
+    uri: &Url,
+) -> OptionalVersionedTextDocumentIdentifier {
+    let version =
+        context
+            .get_document(uri)
+            .and_then(|doc| if doc.is_open { Some(doc.version) } else { None });
+    OptionalVersionedTextDocumentIdentifier {
+        uri: uri.clone(),
+        version,
+    }
 }
 
 fn build_namespace_insert_text(target_content: &str, namespace_text: &str) -> String {
@@ -423,5 +448,271 @@ fn line_end_offset(source: &str, offset: usize) -> usize {
     match source[offset..].find('\n') {
         Some(pos) => offset + pos + 1,
         None => source.len(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        BuildConfig, DiagnosticSettings, IndexingConfig, ProjectConfig, RuntimeConfig,
+        StdlibSettings, TelemetryConfig, WorkspaceSettings,
+    };
+    use crate::state::Document;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use trust_hir::db::FileId;
+
+    #[derive(Clone, Default)]
+    struct MockContext {
+        workspace_configs: Vec<(Url, ProjectConfig)>,
+        workspace_config_by_uri: HashMap<Url, ProjectConfig>,
+        workspace_folders: Vec<Url>,
+        documents_by_uri: HashMap<Url, Document>,
+        documents_by_file_id: HashMap<FileId, Document>,
+        rename_result: Option<RenameResult>,
+    }
+
+    impl MockContext {
+        fn insert_document(&mut self, document: Document) {
+            self.documents_by_file_id
+                .insert(document.file_id, document.clone());
+            self.documents_by_uri.insert(document.uri.clone(), document);
+        }
+    }
+
+    impl ServerContext for MockContext {
+        fn workspace_configs(&self) -> Vec<(Url, ProjectConfig)> {
+            self.workspace_configs.clone()
+        }
+
+        fn workspace_config_for_uri(&self, uri: &Url) -> Option<ProjectConfig> {
+            self.workspace_config_by_uri.get(uri).cloned()
+        }
+
+        fn workspace_folders(&self) -> Vec<Url> {
+            self.workspace_folders.clone()
+        }
+
+        fn get_document(&self, uri: &Url) -> Option<Document> {
+            self.documents_by_uri.get(uri).cloned()
+        }
+
+        fn document_for_file_id(&self, file_id: FileId) -> Option<Document> {
+            self.documents_by_file_id.get(&file_id).cloned()
+        }
+
+        fn rename(
+            &self,
+            _file_id: FileId,
+            _offset: TextSize,
+            _new_name: &str,
+        ) -> Option<RenameResult> {
+            self.rename_result.clone()
+        }
+    }
+
+    fn test_project_config(root: &str, target: &str) -> ProjectConfig {
+        ProjectConfig {
+            root: PathBuf::from(root),
+            config_path: None,
+            include_paths: Vec::new(),
+            vendor_profile: None,
+            stdlib: StdlibSettings::default(),
+            libraries: Vec::new(),
+            dependencies: Vec::new(),
+            dependency_resolution_issues: Vec::new(),
+            diagnostic_external_paths: Vec::new(),
+            build: BuildConfig {
+                target: Some(target.to_string()),
+                ..BuildConfig::default()
+            },
+            targets: Vec::new(),
+            indexing: IndexingConfig::default(),
+            diagnostics: DiagnosticSettings::default(),
+            runtime: RuntimeConfig::default(),
+            workspace: WorkspaceSettings::default(),
+            telemetry: TelemetryConfig::default(),
+        }
+    }
+
+    fn test_document(uri: &str, file_id: u32, content: &str) -> Document {
+        Document::new(
+            Url::parse(uri).expect("test uri"),
+            1,
+            content.to_string(),
+            FileId(file_id),
+            true,
+            1,
+        )
+    }
+
+    #[test]
+    fn project_info_with_mock_context_uses_uri_mapping() {
+        let root_a = Url::parse("file:///workspace/a/").expect("root a");
+        let root_b = Url::parse("file:///workspace/b/").expect("root b");
+        let config_a = test_project_config("/workspace/a", "x86_64");
+        let config_b = test_project_config("/workspace/b", "armv7");
+        let main_uri = Url::parse("file:///workspace/a/src/main.st").expect("main uri");
+
+        let mut context = MockContext {
+            workspace_configs: vec![
+                (root_a.clone(), config_a.clone()),
+                (root_b.clone(), config_b.clone()),
+            ],
+            ..MockContext::default()
+        };
+        context
+            .workspace_config_by_uri
+            .insert(main_uri.clone(), config_a);
+
+        let info = project_info_value_with_context(
+            &context,
+            vec![json!({
+                "text_document": {
+                    "uri": main_uri,
+                }
+            })],
+        )
+        .expect("project info");
+        let projects = info
+            .get("projects")
+            .and_then(Value::as_array)
+            .expect("projects");
+        assert_eq!(projects.len(), 1);
+        assert_eq!(
+            projects[0]
+                .get("build")
+                .and_then(|build| build.get("target"))
+                .and_then(Value::as_str),
+            Some("x86_64")
+        );
+    }
+
+    #[test]
+    fn namespace_move_with_mock_context_generates_expected_operations() {
+        let source = r#"
+NAMESPACE LibA
+TYPE Foo : INT;
+END_TYPE
+END_NAMESPACE
+"#;
+        let main = r#"
+PROGRAM Main
+VAR
+    x : LibA.Foo;
+END_VAR
+END_PROGRAM
+"#;
+        let source_uri = Url::parse("file:///workspace/liba.st").expect("source uri");
+        let main_uri = Url::parse("file:///workspace/main.st").expect("main uri");
+        let target_uri = Url::parse("file:///workspace/Company/LibA.st").expect("target uri");
+
+        let source_doc = test_document(source_uri.as_str(), 1, source);
+        let main_doc = test_document(main_uri.as_str(), 2, main);
+
+        let mut rename_result = RenameResult::new();
+        let ns_start = source.find("LibA").expect("namespace name start");
+        rename_result.add_edit(
+            source_doc.file_id,
+            IdeTextEdit {
+                range: TextRange::new(
+                    TextSize::from(ns_start as u32),
+                    TextSize::from((ns_start + "LibA".len()) as u32),
+                ),
+                new_text: "Company.LibA".to_string(),
+            },
+        );
+        let main_ref_start = main.find("LibA").expect("main namespace reference");
+        rename_result.add_edit(
+            main_doc.file_id,
+            IdeTextEdit {
+                range: TextRange::new(
+                    TextSize::from(main_ref_start as u32),
+                    TextSize::from((main_ref_start + "LibA".len()) as u32),
+                ),
+                new_text: "Company.LibA".to_string(),
+            },
+        );
+
+        let mut context = MockContext {
+            workspace_folders: vec![Url::parse("file:///workspace/").expect("root uri")],
+            rename_result: Some(rename_result),
+            ..MockContext::default()
+        };
+        context.insert_document(source_doc);
+        context.insert_document(main_doc);
+
+        let args = MoveNamespaceCommandArgs {
+            text_document: TextDocumentIdentifier {
+                uri: source_uri.clone(),
+            },
+            position: offset_to_position(source, source.find("LibA").expect("position") as u32),
+            new_path: "Company.LibA".to_string(),
+            target_uri: Some(target_uri.clone()),
+        };
+        let edit = namespace_move_workspace_edit_with_context(&context, args).expect("edit");
+        let ops = match edit.document_changes.expect("document changes") {
+            DocumentChanges::Operations(ops) => ops,
+            DocumentChanges::Edits(_) => panic!("expected operation list"),
+        };
+
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                DocumentChangeOperation::Op(ResourceOp::Create(create)) if create.uri == target_uri
+            )),
+            "expected target file create operation"
+        );
+        assert!(
+            ops.iter().any(|op| matches!(
+                op,
+                DocumentChangeOperation::Op(ResourceOp::Delete(delete)) if delete.uri == source_uri
+            )),
+            "expected source file delete operation"
+        );
+
+        let target_edit = ops.iter().find_map(|op| match op {
+            DocumentChangeOperation::Edit(edit) if edit.text_document.uri == target_uri => {
+                Some(edit)
+            }
+            _ => None,
+        });
+        let target_edit = target_edit.expect("target edit");
+        let target_contains_renamed_namespace = target_edit.edits.iter().any(|edit| match edit {
+            tower_lsp::lsp_types::OneOf::Left(edit) => {
+                edit.new_text.contains("NAMESPACE Company.LibA")
+            }
+            tower_lsp::lsp_types::OneOf::Right(_) => false,
+        });
+        assert!(
+            target_contains_renamed_namespace,
+            "target insertion should include renamed namespace"
+        );
+
+        let main_edit = ops.iter().find_map(|op| match op {
+            DocumentChangeOperation::Edit(edit) if edit.text_document.uri == main_uri => Some(edit),
+            _ => None,
+        });
+        let main_edit = main_edit.expect("main edit");
+        let main_updated = main_edit.edits.iter().any(|edit| match edit {
+            tower_lsp::lsp_types::OneOf::Left(edit) => edit.new_text.contains("Company.LibA"),
+            tower_lsp::lsp_types::OneOf::Right(_) => false,
+        });
+        assert!(main_updated, "main file should include renamed namespace");
+    }
+
+    #[test]
+    fn project_info_server_state_and_context_paths_match() {
+        let state = ServerState::new();
+        let root = Url::parse("file:///workspace/").expect("root");
+        state.set_workspace_folders(vec![root.clone()]);
+        state.set_workspace_config(root, test_project_config("/workspace", "x86_64"));
+
+        let from_wrapper = project_info_value(&state, Vec::new()).expect("wrapper value");
+        let from_context =
+            project_info_value_with_context(&state, Vec::new()).expect("context value");
+        assert_eq!(from_wrapper, from_context);
     }
 }
