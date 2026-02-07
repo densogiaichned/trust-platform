@@ -36,6 +36,23 @@ pub(super) fn open_document(
 }
 
 pub(super) fn index_document(state: &ServerState, uri: Url, content: String) -> Option<FileId> {
+    index_document_impl(state, uri, content, true)
+}
+
+pub(super) fn index_document_deferred_budget(
+    state: &ServerState,
+    uri: Url,
+    content: String,
+) -> Option<FileId> {
+    index_document_impl(state, uri, content, false)
+}
+
+fn index_document_impl(
+    state: &ServerState,
+    uri: Url,
+    content: String,
+    enforce_budget_after_index: bool,
+) -> Option<FileId> {
     if let Some(doc) = state.documents.read().get(&uri) {
         if !doc.is_open && doc.content == content {
             return None;
@@ -75,7 +92,9 @@ pub(super) fn index_document(state: &ServerState, uri: Url, content: String) -> 
         }
     }
 
-    enforce_memory_budget(state);
+    if enforce_budget_after_index {
+        enforce_memory_budget(state);
+    }
     Some(file_id)
 }
 

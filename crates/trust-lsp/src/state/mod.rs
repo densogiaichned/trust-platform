@@ -276,6 +276,11 @@ impl ServerState {
         documents::index_document(self, uri, content)
     }
 
+    /// Indexes a document while deferring memory-budget enforcement to the caller.
+    pub fn index_document_deferred_budget(&self, uri: Url, content: String) -> Option<FileId> {
+        documents::index_document_deferred_budget(self, uri, content)
+    }
+
     /// Updates a document.
     pub fn update_document(&self, uri: &Url, version: i32, content: String) {
         documents::update_document(self, uri, version, content);

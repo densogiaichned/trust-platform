@@ -47,6 +47,7 @@ struct DiscoveredTest {
     file: PathBuf,
     byte_offset: u32,
     line: usize,
+    source_line: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -214,6 +215,7 @@ fn render_human_output(
     summary: TestSummary,
 ) -> String {
     let mut output = String::new();
+    let mut failed_results = Vec::new();
     let _ = writeln!(
         output,
         "{}",
@@ -227,43 +229,85 @@ fn render_human_output(
         let _ = writeln!(output, "{}", style::warning("No ST tests discovered."));
     }
     for (idx, result) in results.iter().enumerate() {
-        let prefix = format!(
-            "[{}/{}] {}",
-            idx + 1,
-            results.len(),
-            result.case.kind.label()
-        );
+        let prefix = format!("[{}/{}]", idx + 1, results.len());
+        let test_id = format!("{}::{}", result.case.kind.label(), result.case.name);
         match result.outcome {
             TestOutcome::Passed => {
                 let _ = writeln!(
                     output,
-                    "{} {} ({})",
+                    "{} {} {} ({})",
                     style::success("PASS"),
-                    result.case.name,
+                    prefix,
+                    test_id,
                     result.case.file.display()
                 );
             }
             TestOutcome::Failed => {
                 let _ = writeln!(
                     output,
-                    "{} {} {}:{} {}",
+                    "{} {} {} {}:{}",
                     style::error("FAIL"),
                     prefix,
+                    test_id,
                     result.case.file.display(),
-                    result.case.line,
+                    result.case.line
+                );
+                let _ = writeln!(
+                    output,
+                    "    reason   : {}",
                     result.message.as_deref().unwrap_or("assertion failed")
                 );
+                if let Some(source_line) = result.case.source_line.as_deref() {
+                    let _ = writeln!(output, "    source   : {source_line}");
+                }
+                failed_results.push(result);
             }
             TestOutcome::Error => {
                 let _ = writeln!(
                     output,
-                    "{} {} {}:{} {}",
+                    "{} {} {} {}:{}",
                     style::error("ERROR"),
                     prefix,
+                    test_id,
                     result.case.file.display(),
-                    result.case.line,
+                    result.case.line
+                );
+                let _ = writeln!(
+                    output,
+                    "    reason   : {}",
                     result.message.as_deref().unwrap_or("runtime error")
                 );
+                if let Some(source_line) = result.case.source_line.as_deref() {
+                    let _ = writeln!(output, "    source   : {source_line}");
+                }
+                failed_results.push(result);
+            }
+        }
+    }
+    if !failed_results.is_empty() {
+        let _ = writeln!(output);
+        let _ = writeln!(output, "{}", style::warning("Failure summary:"));
+        for (idx, result) in failed_results.iter().enumerate() {
+            let _ = writeln!(
+                output,
+                "  {}. {}::{} @ {}:{}",
+                idx + 1,
+                result.case.kind.label(),
+                result.case.name,
+                result.case.file.display(),
+                result.case.line
+            );
+            let _ = writeln!(
+                output,
+                "     {}",
+                result.message.as_deref().unwrap_or(match result.outcome {
+                    TestOutcome::Failed => "assertion failed",
+                    TestOutcome::Error => "runtime error",
+                    TestOutcome::Passed => "passed",
+                })
+            );
+            if let Some(source_line) = result.case.source_line.as_deref() {
+                let _ = writeln!(output, "     source: {source_line}");
             }
         }
     }
@@ -289,6 +333,7 @@ fn render_json_output(
                 "status": result.outcome.as_str(),
                 "file": result.case.file.display().to_string(),
                 "line": result.case.line,
+                "source": result.case.source_line.as_deref(),
                 "message": result.message.as_deref(),
             })
         })
@@ -327,6 +372,9 @@ fn render_tap_output(results: &[ExecutedTest]) -> String {
                 let _ = writeln!(output, "not ok {} - {}", idx + 1, name);
                 let _ = writeln!(output, "# file: {}", result.case.file.display());
                 let _ = writeln!(output, "# line: {}", result.case.line);
+                if let Some(source_line) = result.case.source_line.as_deref() {
+                    let _ = writeln!(output, "# source: {}", tap_escape(source_line));
+                }
                 if let Some(message) = &result.message {
                     for line in message.lines() {
                         let _ = writeln!(output, "# {}", tap_escape(line));
@@ -363,19 +411,31 @@ fn render_junit_output(results: &[ExecutedTest], summary: TestSummary) -> String
         match result.outcome {
             TestOutcome::Passed => {}
             TestOutcome::Failed => {
-                let message = xml_escape(result.message.as_deref().unwrap_or("assertion failed"));
+                let message_text = result.message.as_deref().unwrap_or("assertion failed");
+                let message = xml_escape(message_text);
+                let mut details = String::from(message_text);
+                if let Some(source_line) = result.case.source_line.as_deref() {
+                    let _ = write!(details, "\nsource: {source_line}");
+                }
+                let details = xml_escape(&details);
                 let _ = writeln!(
                     output,
                     "    <failure message=\"{}\">{}</failure>",
-                    message, message
+                    message, details
                 );
             }
             TestOutcome::Error => {
-                let message = xml_escape(result.message.as_deref().unwrap_or("runtime error"));
+                let message_text = result.message.as_deref().unwrap_or("runtime error");
+                let message = xml_escape(message_text);
+                let mut details = String::from(message_text);
+                if let Some(source_line) = result.case.source_line.as_deref() {
+                    let _ = write!(details, "\nsource: {source_line}");
+                }
+                let details = xml_escape(&details);
                 let _ = writeln!(
                     output,
                     "    <error message=\"{}\">{}</error>",
-                    message, message
+                    message, details
                 );
             }
         }
@@ -485,7 +545,12 @@ fn discover_tests(sources: &[LoadedSource]) -> Vec<DiscoveredTest> {
             let Some(name) = qualified_pou_name(&node) else {
                 continue;
             };
-            let byte_offset = u32::from(node.text_range().start());
+            let byte_offset = node
+                .children_with_tokens()
+                .filter_map(|element| element.into_token())
+                .find(|token| !token.kind().is_trivia())
+                .map(|token| u32::from(token.text_range().start()))
+                .unwrap_or_else(|| u32::from(node.text_range().start()));
             let line = line_for_offset(&source.text, byte_offset as usize);
             tests.push(DiscoveredTest {
                 kind,
@@ -493,6 +558,7 @@ fn discover_tests(sources: &[LoadedSource]) -> Vec<DiscoveredTest> {
                 file: source.path.clone(),
                 byte_offset,
                 line,
+                source_line: source_line_for_offset(&source.text, byte_offset as usize),
             });
         }
     }
@@ -545,6 +611,21 @@ fn line_for_offset(text: &str, byte_offset: usize) -> usize {
     text[..offset].bytes().filter(|byte| *byte == b'\n').count() + 1
 }
 
+fn source_line_for_offset(text: &str, byte_offset: usize) -> Option<String> {
+    let offset = byte_offset.min(text.len());
+    let line_start = text[..offset].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let line_end = text[offset..]
+        .find('\n')
+        .map(|rel| offset + rel)
+        .unwrap_or(text.len());
+    let line = text[line_start..line_end].trim();
+    if line.is_empty() {
+        None
+    } else {
+        Some(line.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,8 +657,16 @@ END_NAMESPACE
         assert_eq!(discovered.len(), 2);
         assert_eq!(discovered[0].name, "CaseOne");
         assert_eq!(discovered[0].kind, TestKind::FunctionBlock);
+        assert_eq!(
+            discovered[0].source_line.as_deref(),
+            Some("TEST_FUNCTION_BLOCK CaseOne")
+        );
         assert_eq!(discovered[1].name, "Plain");
         assert_eq!(discovered[1].kind, TestKind::Program);
+        assert_eq!(
+            discovered[1].source_line.as_deref(),
+            Some("TEST_PROGRAM Plain")
+        );
     }
 
     #[test]
@@ -673,6 +762,7 @@ END_TEST_PROGRAM
         assert_eq!(value["tests"][0]["status"], "passed");
         assert_eq!(value["tests"][1]["status"], "failed");
         assert_eq!(value["tests"][2]["status"], "error");
+        assert_eq!(value["tests"][1]["source"], "ASSERT_EQUAL(INT#2, X);");
     }
 
     #[test]
@@ -693,6 +783,7 @@ END_TEST_PROGRAM
         assert!(output.contains("not ok 3 - TEST_FUNCTION_BLOCK::ErrCase"));
         assert!(output.contains("# file: tests.st"));
         assert!(output.contains("# line: 12"));
+        assert!(output.contains("# source: ASSERT_EQUAL(INT#2, X);"));
     }
 
     #[test]
@@ -728,6 +819,7 @@ END_TEST_PROGRAM
                     file: PathBuf::from("tests.st"),
                     byte_offset: 0,
                     line: 4,
+                    source_line: Some("ASSERT_TRUE(TRUE);".to_string()),
                 },
                 outcome: TestOutcome::Passed,
                 message: None,
@@ -739,6 +831,7 @@ END_TEST_PROGRAM
                     file: PathBuf::from("tests.st"),
                     byte_offset: 10,
                     line: 12,
+                    source_line: Some("ASSERT_EQUAL(INT#2, X);".to_string()),
                 },
                 outcome: TestOutcome::Failed,
                 message: Some("ASSERT_EQUAL failed: expected <2> & got 3".to_string()),
@@ -750,11 +843,32 @@ END_TEST_PROGRAM
                     file: PathBuf::from("fb_tests.st"),
                     byte_offset: 20,
                     line: 20,
+                    source_line: Some("ASSERT_TRUE(FALSE);".to_string()),
                 },
                 outcome: TestOutcome::Error,
                 message: Some("runtime <panic>".to_string()),
             },
         ]
+    }
+
+    #[test]
+    fn human_output_shows_failure_summary_with_source_context() {
+        let results = sample_results();
+        let summary = summarize_results(&results);
+        let output = render_output(
+            TestOutput::Human,
+            Path::new("/tmp/project"),
+            &results,
+            summary,
+        )
+        .expect("human output");
+
+        assert!(output.contains("FAIL [2/3] TEST_PROGRAM::FailCase tests.st:12"));
+        assert!(output.contains("reason   : ASSERT_EQUAL failed: expected <2> & got 3"));
+        assert!(output.contains("source   : ASSERT_EQUAL(INT#2, X);"));
+        assert!(output.contains("Failure summary:"));
+        assert!(output.contains("1. TEST_PROGRAM::FailCase @ tests.st:12"));
+        assert!(output.contains("2. TEST_FUNCTION_BLOCK::ErrCase @ fb_tests.st:20"));
     }
 
     #[test]

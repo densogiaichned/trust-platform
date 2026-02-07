@@ -111,7 +111,7 @@ Operations UI:
 Dedicated HMI control API (via `POST /api/control`):
 - `hmi.schema.get`
 - `hmi.values.get`
-- `hmi.write` (currently disabled in read-only mode)
+- `hmi.write` (phase-gated: enabled only when `[write].enabled = true` in `hmi.toml` and target is explicitly allowlisted)
 
 ## Debug Attach (Development)
 

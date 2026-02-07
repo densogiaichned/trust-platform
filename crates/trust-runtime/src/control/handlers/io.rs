@@ -16,7 +16,7 @@ pub(super) fn dispatch(request: &ControlRequest, state: &ControlState) -> Option
         "hmi.alarm.ack" => {
             super::super::handle_hmi_alarm_ack(request.id, request.params.clone(), state)
         }
-        "hmi.write" => super::super::handle_hmi_write(request.id),
+        "hmi.write" => super::super::handle_hmi_write(request.id, request.params.clone(), state),
         "io.read" => super::super::handle_io_read(request.id, state),
         "io.write" => super::super::handle_io_write(request.id, request.params.clone(), state),
         "io.force" => super::super::handle_io_force(request.id, request.params.clone(), state),

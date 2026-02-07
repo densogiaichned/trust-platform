@@ -1,0 +1,2 @@
+crates/trust-lsp/src/handlers/snapshots/trust_lsp__handlers__tests__core__lsp_tutorial_examples_diagnostics.snap
+crates/trust-lsp/src/handlers/snapshots/trust_lsp__handlers__tests__lsp_golden_multi_root_protocol_snapshot.snap

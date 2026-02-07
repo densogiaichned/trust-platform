@@ -311,7 +311,10 @@ impl IndexThrottle {
         } else {
             self.idle_ms
         };
-        let mut delay = base.saturating_add(self.ema_ms.round() as u64);
+        let mut delay = base;
+        if base > 0 {
+            delay = delay.saturating_add(self.ema_ms.round() as u64);
+        }
         if self.max_ms > 0 {
             delay = delay.min(self.max_ms);
         }
@@ -357,6 +360,8 @@ async fn index_workspace_root(
     let mut indexed = 0usize;
     let mut skipped = 0usize;
     let mut truncated = false;
+    let mut indexed_since_budget_check = 0usize;
+    const BUDGET_CHECK_INTERVAL: usize = 256;
     let max_files = config.indexing.max_files;
     let max_ms = config.indexing.max_ms;
     let mut last_percent = 0u32;
@@ -399,10 +404,18 @@ async fn index_workspace_root(
         let step_start = Instant::now();
         if let Some(cache) = cache.as_ref() {
             if let Some(cached) = cache.content_for_path(path) {
-                if state.index_document(uri, cached.to_string()).is_some() {
+                if state
+                    .index_document_deferred_budget(uri, cached.to_string())
+                    .is_some()
+                {
                     indexed += 1;
+                    indexed_since_budget_check += 1;
                 } else {
                     skipped += 1;
+                }
+                if indexed_since_budget_check >= BUDGET_CHECK_INTERVAL {
+                    state.apply_memory_budget();
+                    indexed_since_budget_check = 0;
                 }
                 report_progress(client, &progress, idx + 1, total, &mut last_percent).await;
                 throttle.pause(state, step_start.elapsed()).await;
@@ -418,10 +431,15 @@ async fn index_workspace_root(
         if let Some(cache) = cache.as_mut() {
             cache.update_from_content(path, content.clone());
         }
-        if state.index_document(uri, content).is_some() {
+        if state.index_document_deferred_budget(uri, content).is_some() {
             indexed += 1;
+            indexed_since_budget_check += 1;
         } else {
             skipped += 1;
+        }
+        if indexed_since_budget_check >= BUDGET_CHECK_INTERVAL {
+            state.apply_memory_budget();
+            indexed_since_budget_check = 0;
         }
 
         report_progress(client, &progress, idx + 1, total, &mut last_percent).await;

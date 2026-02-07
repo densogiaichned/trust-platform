@@ -2,7 +2,7 @@
 
 #![allow(missing_docs)]
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::Path;
 
 use indexmap::IndexMap;
@@ -202,6 +202,19 @@ enum HmiBinding {
 }
 
 #[derive(Debug, Clone)]
+pub enum HmiWriteBinding {
+    ProgramVar { program: SmolStr, variable: SmolStr },
+    Global { name: SmolStr },
+}
+
+#[derive(Debug, Clone)]
+pub struct HmiWritePoint {
+    pub id: String,
+    pub path: String,
+    pub binding: HmiWriteBinding,
+}
+
+#[derive(Debug, Clone)]
 struct HmiPoint {
     id: String,
     path: String,
@@ -231,6 +244,7 @@ pub struct HmiCustomization {
     theme: HmiThemeConfig,
     responsive: HmiResponsiveConfig,
     export: HmiExportConfig,
+    write: HmiWriteConfig,
     pages: Vec<HmiPageConfig>,
     widget_overrides: BTreeMap<String, HmiWidgetOverride>,
     annotation_overrides: BTreeMap<String, HmiWidgetOverride>,
@@ -260,6 +274,12 @@ struct HmiResponsiveConfig {
 #[derive(Debug, Clone, Default)]
 struct HmiExportConfig {
     enabled: Option<bool>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct HmiWriteConfig {
+    enabled: Option<bool>,
+    allow: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -323,6 +343,8 @@ struct HmiTomlFile {
     #[serde(default)]
     export: HmiTomlExport,
     #[serde(default)]
+    write: HmiTomlWrite,
+    #[serde(default)]
     pages: Vec<HmiTomlPage>,
     #[serde(default)]
     widgets: BTreeMap<String, HmiTomlWidgetOverride>,
@@ -366,6 +388,27 @@ struct HmiTomlExport {
     enabled: Option<bool>,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct HmiTomlWrite {
+    enabled: Option<bool>,
+    #[serde(default)]
+    allow: Vec<String>,
+}
+
+impl HmiCustomization {
+    pub fn write_enabled(&self) -> bool {
+        self.write.enabled.unwrap_or(false)
+    }
+
+    pub fn write_allowlist(&self) -> &BTreeSet<String> {
+        &self.write.allow
+    }
+
+    pub fn write_target_allowed(&self, target: &str) -> bool {
+        self.write.allow.contains(target)
+    }
+}
+
 impl From<HmiTomlWidgetOverride> for HmiWidgetOverride {
     fn from(value: HmiTomlWidgetOverride) -> Self {
         Self {
@@ -405,6 +448,14 @@ pub fn load_customization(
             customization.theme.accent = parsed.theme.accent;
             customization.responsive.mode = parsed.responsive.mode;
             customization.export.enabled = parsed.export.enabled;
+            customization.write.enabled = parsed.write.enabled;
+            customization.write.allow = parsed
+                .write
+                .allow
+                .into_iter()
+                .map(|entry| entry.trim().to_string())
+                .filter(|entry| !entry.is_empty())
+                .collect();
             customization.pages = parsed
                 .pages
                 .into_iter()
@@ -572,6 +623,51 @@ pub fn build_values(
         source_time_ns: snapshot.map(|state| state.now.as_nanos()),
         freshness_ms: snapshot.map(|_| 0),
         values,
+    }
+}
+
+pub fn resolve_write_point(
+    resource_name: &str,
+    metadata: &RuntimeMetadata,
+    snapshot: Option<&DebugSnapshot>,
+    target: &str,
+) -> Option<HmiWritePoint> {
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    collect_points(resource_name, metadata, snapshot, true)
+        .into_iter()
+        .find(|point| point.id == target || point.path == target)
+        .map(|point| HmiWritePoint {
+            id: point.id,
+            path: point.path,
+            binding: match point.binding {
+                HmiBinding::ProgramVar { program, variable } => {
+                    HmiWriteBinding::ProgramVar { program, variable }
+                }
+                HmiBinding::Global { name } => HmiWriteBinding::Global { name },
+            },
+        })
+}
+
+pub fn resolve_write_value_template(
+    point: &HmiWritePoint,
+    snapshot: &DebugSnapshot,
+) -> Option<Value> {
+    match &point.binding {
+        HmiWriteBinding::ProgramVar { program, variable } => {
+            let Value::Instance(instance_id) = snapshot.storage.get_global(program.as_str())?
+            else {
+                return None;
+            };
+            snapshot
+                .storage
+                .get_instance(*instance_id)
+                .and_then(|instance| instance.variables.get(variable.as_str()))
+                .cloned()
+        }
+        HmiWriteBinding::Global { name } => snapshot.storage.get_global(name.as_str()).cloned(),
     }
 }
 
@@ -1923,6 +2019,60 @@ END_PROGRAM
                 "text": "#142133"
             })
         );
+    }
+
+    #[test]
+    fn write_customization_parses_enabled_and_allowlist() {
+        let root = temp_dir("trust-runtime-hmi-write-config");
+        write_file(
+            &root.join("hmi.toml"),
+            r#"
+[write]
+enabled = true
+allow = [" resource/RESOURCE/program/Main/field/run ", "", "Main.run"]
+"#,
+        );
+        let source_refs: [HmiSourceRef<'_>; 0] = [];
+        let customization = load_customization(Some(&root), &source_refs);
+        assert!(customization.write_enabled());
+        assert_eq!(customization.write_allowlist().len(), 2);
+        assert!(customization.write_target_allowed("resource/RESOURCE/program/Main/field/run"));
+        assert!(customization.write_target_allowed("Main.run"));
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn resolve_write_point_supports_id_and_path_matches() {
+        let source = r#"
+PROGRAM Main
+VAR
+    run : BOOL := TRUE;
+END_VAR
+END_PROGRAM
+"#;
+        let harness = TestHarness::from_source(source).expect("build harness");
+        let metadata = harness.runtime().metadata_snapshot();
+        let snapshot = crate::debug::DebugSnapshot {
+            storage: harness.runtime().storage().clone(),
+            now: harness.runtime().current_time(),
+        };
+
+        let by_id = resolve_write_point(
+            "RESOURCE",
+            &metadata,
+            Some(&snapshot),
+            "resource/RESOURCE/program/Main/field/run",
+        )
+        .expect("resolve id");
+        assert_eq!(by_id.path, "Main.run");
+        assert_eq!(
+            resolve_write_value_template(&by_id, &snapshot),
+            Some(Value::Bool(true))
+        );
+
+        let by_path = resolve_write_point("RESOURCE", &metadata, Some(&snapshot), "Main.run")
+            .expect("resolve path");
+        assert_eq!(by_path.id, "resource/RESOURCE/program/Main/field/run");
     }
 
     fn synthetic_schema(min: Option<f64>, max: Option<f64>) -> HmiSchemaResult {

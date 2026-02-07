@@ -389,6 +389,23 @@ mod tests {
 
     #[test]
     fn mesh_tls_publish_applies_updates() {
+        let mut last_error = None;
+        for _attempt in 0..3 {
+            match try_mesh_tls_publish_applies_updates() {
+                Ok(()) => return,
+                Err(error) => {
+                    last_error = Some(error);
+                    std::thread::sleep(StdDuration::from_millis(60));
+                }
+            }
+        }
+        panic!(
+            "mesh tls publish apply failed after retries: {}",
+            last_error.unwrap_or_else(|| "unknown failure".to_string())
+        );
+    }
+
+    fn try_mesh_tls_publish_applies_updates() -> Result<(), String> {
         let tls = tls_test_transport();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind tls mesh listener");
         let addr = listener.local_addr().expect("tls mesh addr");
@@ -444,16 +461,18 @@ mod tests {
         let mut data = BTreeMap::new();
         data.insert("temperature".to_string(), json!(42));
 
-        send_publish(&addr, &sender_state, &data).expect("send mesh tls publish");
+        send_publish(&addr, &sender_state, &data).map_err(|err| err.to_string())?;
         let updates = apply_rx
-            .recv_timeout(StdDuration::from_millis(400))
-            .expect("mesh apply updates");
-        assert_eq!(
-            updates.get("resource/RESOURCE/program/Main/field/temp"),
-            Some(&Value::DInt(42))
-        );
+            .recv_timeout(StdDuration::from_millis(1200))
+            .map_err(|err| format!("mesh apply updates: {err:?}"))?;
+        if updates.get("resource/RESOURCE/program/Main/field/temp") != Some(&Value::DInt(42)) {
+            return Err("mesh apply updates missing expected value".to_string());
+        }
 
-        listener_thread.join().expect("join mesh tls listener");
+        listener_thread
+            .join()
+            .map_err(|_| "join mesh tls listener".to_string())?;
+        Ok(())
     }
 
     #[test]

@@ -765,8 +765,100 @@ fn handle_hmi_alarm_ack(
     )
 }
 
-fn handle_hmi_write(id: u64) -> ControlResponse {
-    ControlResponse::error(id, "hmi.write disabled in read-only mode".into())
+fn handle_hmi_write(
+    id: u64,
+    params: Option<serde_json::Value>,
+    state: &ControlState,
+) -> ControlResponse {
+    let params = match params {
+        Some(value) => match serde_json::from_value::<HmiWriteParams>(value) {
+            Ok(parsed) => parsed,
+            Err(err) => return ControlResponse::error(id, format!("invalid params: {err}")),
+        },
+        None => return ControlResponse::error(id, "missing params".into()),
+    };
+    let target = params.id.trim();
+    if target.is_empty() {
+        return ControlResponse::error(id, "missing params.id".into());
+    }
+
+    let customization = load_hmi_customization(state);
+    if !customization.write_enabled() {
+        return ControlResponse::error(id, "hmi.write disabled in read-only mode".into());
+    }
+    if customization.write_allowlist().is_empty() {
+        return ControlResponse::error(id, "hmi.write allowlist is empty".into());
+    }
+
+    let metadata = match state.metadata.lock() {
+        Ok(guard) => guard,
+        Err(_) => return ControlResponse::error(id, "metadata unavailable".into()),
+    };
+    let snapshot = match load_runtime_snapshot(state) {
+        Some(snapshot) => snapshot,
+        None => return ControlResponse::error(id, "runtime snapshot unavailable".into()),
+    };
+    let point = match crate::hmi::resolve_write_point(
+        state.resource_name.as_str(),
+        &metadata,
+        Some(&snapshot),
+        target,
+    ) {
+        Some(point) => point,
+        None => return ControlResponse::error(id, format!("unknown hmi target '{target}'")),
+    };
+    let allowed = customization.write_target_allowed(point.id.as_str())
+        || customization.write_target_allowed(point.path.as_str());
+    if !allowed {
+        return ControlResponse::error(id, "hmi.write target is not in allowlist".into());
+    }
+    let template = match crate::hmi::resolve_write_value_template(&point, &snapshot) {
+        Some(value) => value,
+        None => {
+            return ControlResponse::error(
+                id,
+                format!("hmi.write target '{}' is currently unavailable", point.id),
+            )
+        }
+    };
+    let value = match parse_hmi_write_value(&params.value, &template) {
+        Some(value) => value,
+        None => {
+            return ControlResponse::error(
+                id,
+                format!("invalid hmi.write value for target '{}'", point.id),
+            )
+        }
+    };
+
+    match &point.binding {
+        crate::hmi::HmiWriteBinding::ProgramVar { program, variable } => {
+            let instance_id = match snapshot.storage.get_global(program.as_str()) {
+                Some(Value::Instance(instance_id)) => *instance_id,
+                _ => {
+                    return ControlResponse::error(
+                        id,
+                        format!("hmi.write target '{}' is currently unavailable", point.id),
+                    )
+                }
+            };
+            state
+                .debug
+                .enqueue_instance_write(instance_id, variable.clone(), value);
+        }
+        crate::hmi::HmiWriteBinding::Global { name } => {
+            state.debug.enqueue_global_write(name.clone(), value);
+        }
+    }
+
+    ControlResponse::ok(
+        id,
+        json!({
+            "status": "queued",
+            "id": point.id,
+            "path": point.path,
+        }),
+    )
 }
 
 fn load_hmi_customization(state: &ControlState) -> crate::hmi::HmiCustomization {
@@ -2581,6 +2673,125 @@ fn parse_value(text: &str) -> Result<Value, RuntimeError> {
     ))
 }
 
+fn parse_hmi_write_value(value: &serde_json::Value, template: &Value) -> Option<Value> {
+    let parsed = match (value, template) {
+        (serde_json::Value::Bool(value), Value::Bool(_)) => Some(Value::Bool(*value)),
+        (serde_json::Value::Number(value), Value::SInt(_)) => {
+            Some(Value::SInt(i8::try_from(value.as_i64()?).ok()?))
+        }
+        (serde_json::Value::Number(value), Value::Int(_)) => {
+            Some(Value::Int(i16::try_from(value.as_i64()?).ok()?))
+        }
+        (serde_json::Value::Number(value), Value::DInt(_)) => {
+            Some(Value::DInt(i32::try_from(value.as_i64()?).ok()?))
+        }
+        (serde_json::Value::Number(value), Value::LInt(_)) => Some(Value::LInt(value.as_i64()?)),
+        (serde_json::Value::Number(value), Value::USInt(_)) => {
+            Some(Value::USInt(u8::try_from(value.as_u64()?).ok()?))
+        }
+        (serde_json::Value::Number(value), Value::UInt(_)) => {
+            Some(Value::UInt(u16::try_from(value.as_u64()?).ok()?))
+        }
+        (serde_json::Value::Number(value), Value::UDInt(_)) => {
+            Some(Value::UDInt(u32::try_from(value.as_u64()?).ok()?))
+        }
+        (serde_json::Value::Number(value), Value::ULInt(_)) => Some(Value::ULInt(value.as_u64()?)),
+        (serde_json::Value::Number(value), Value::Byte(_)) => {
+            Some(Value::Byte(u8::try_from(value.as_u64()?).ok()?))
+        }
+        (serde_json::Value::Number(value), Value::Word(_)) => {
+            Some(Value::Word(u16::try_from(value.as_u64()?).ok()?))
+        }
+        (serde_json::Value::Number(value), Value::DWord(_)) => {
+            Some(Value::DWord(u32::try_from(value.as_u64()?).ok()?))
+        }
+        (serde_json::Value::Number(value), Value::LWord(_)) => Some(Value::LWord(value.as_u64()?)),
+        (serde_json::Value::Number(value), Value::Real(_)) => {
+            Some(Value::Real(value.as_f64()? as f32))
+        }
+        (serde_json::Value::Number(value), Value::LReal(_)) => Some(Value::LReal(value.as_f64()?)),
+        (serde_json::Value::String(value), Value::String(_)) => {
+            Some(Value::String(SmolStr::new(value)))
+        }
+        (serde_json::Value::String(value), Value::WString(_)) => {
+            Some(Value::WString(value.clone()))
+        }
+        (serde_json::Value::String(value), Value::Char(_)) => {
+            Some(Value::Char(single_u8_char(value)?))
+        }
+        (serde_json::Value::String(value), Value::WChar(_)) => Some(Value::WChar(
+            u16::try_from(single_char(value)? as u32).ok()?,
+        )),
+        (serde_json::Value::String(text), _) => parse_hmi_write_from_text(text, template),
+        _ => None,
+    }?;
+    Some(parsed)
+}
+
+fn parse_hmi_write_from_text(text: &str, template: &Value) -> Option<Value> {
+    let trimmed = text.trim();
+    match template {
+        Value::Bool(_) => match trimmed.to_ascii_uppercase().as_str() {
+            "TRUE" => Some(Value::Bool(true)),
+            "FALSE" => Some(Value::Bool(false)),
+            _ => None,
+        },
+        Value::SInt(_) => Some(Value::SInt(
+            i8::try_from(trimmed.parse::<i64>().ok()?).ok()?,
+        )),
+        Value::Int(_) => Some(Value::Int(
+            i16::try_from(trimmed.parse::<i64>().ok()?).ok()?,
+        )),
+        Value::DInt(_) => Some(Value::DInt(
+            i32::try_from(trimmed.parse::<i64>().ok()?).ok()?,
+        )),
+        Value::LInt(_) => Some(Value::LInt(trimmed.parse::<i64>().ok()?)),
+        Value::USInt(_) => Some(Value::USInt(
+            u8::try_from(trimmed.parse::<u64>().ok()?).ok()?,
+        )),
+        Value::UInt(_) => Some(Value::UInt(
+            u16::try_from(trimmed.parse::<u64>().ok()?).ok()?,
+        )),
+        Value::UDInt(_) => Some(Value::UDInt(
+            u32::try_from(trimmed.parse::<u64>().ok()?).ok()?,
+        )),
+        Value::ULInt(_) => Some(Value::ULInt(trimmed.parse::<u64>().ok()?)),
+        Value::Byte(_) => Some(Value::Byte(
+            u8::try_from(trimmed.parse::<u64>().ok()?).ok()?,
+        )),
+        Value::Word(_) => Some(Value::Word(
+            u16::try_from(trimmed.parse::<u64>().ok()?).ok()?,
+        )),
+        Value::DWord(_) => Some(Value::DWord(
+            u32::try_from(trimmed.parse::<u64>().ok()?).ok()?,
+        )),
+        Value::LWord(_) => Some(Value::LWord(trimmed.parse::<u64>().ok()?)),
+        Value::Real(_) => Some(Value::Real(trimmed.parse::<f32>().ok()?)),
+        Value::LReal(_) => Some(Value::LReal(trimmed.parse::<f64>().ok()?)),
+        Value::String(_) => Some(Value::String(SmolStr::new(trimmed))),
+        Value::WString(_) => Some(Value::WString(trimmed.to_string())),
+        Value::Char(_) => Some(Value::Char(single_u8_char(trimmed)?)),
+        Value::WChar(_) => Some(Value::WChar(
+            u16::try_from(single_char(trimmed)? as u32).ok()?,
+        )),
+        _ => None,
+    }
+}
+
+fn single_char(value: &str) -> Option<char> {
+    let mut chars = value.chars();
+    let first = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    Some(first)
+}
+
+fn single_u8_char(value: &str) -> Option<u8> {
+    let ch = single_char(value)?;
+    u8::try_from(ch as u32).ok()
+}
+
 #[derive(Debug, Deserialize)]
 struct ControlRequest {
     id: u64,
@@ -2676,6 +2887,13 @@ struct HmiAlarmsParams {
 #[derive(Debug, Deserialize)]
 struct HmiAlarmAckParams {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HmiWriteParams {
+    #[serde(alias = "path", alias = "target")]
+    id: String,
+    value: serde_json::Value,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2872,6 +3090,8 @@ fn io_health_to_json(entry: &IoDriverStatus) -> serde_json::Value {
 mod tests {
     use super::*;
     use std::collections::VecDeque;
+    use std::fs;
+    use std::path::Path;
     use std::path::PathBuf;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
@@ -2880,7 +3100,7 @@ mod tests {
     use indexmap::IndexMap;
     use serde_json::json;
 
-    use crate::debug::DebugVariableHandles;
+    use crate::debug::{DebugVariableHandles, PendingVarTarget};
     use crate::error::RuntimeError;
     use crate::harness::TestHarness;
     use crate::historian::{AlertRule, HistorianConfig, HistorianService, RecordingMode};
@@ -2899,6 +3119,23 @@ mod tests {
             .unwrap_or_default()
             .as_nanos();
         std::env::temp_dir().join(format!("trust-control-{name}-{stamp}.jsonl"))
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("trust-control-{name}-{stamp}"));
+        fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+
+    fn write_file(path: &Path, content: &str) {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent");
+        }
+        fs::write(path, content).expect("write file");
     }
 
     fn runtime_settings() -> RuntimeSettings {
@@ -3237,6 +3474,188 @@ END_PROGRAM
             response.error.as_deref(),
             Some("hmi.write disabled in read-only mode")
         );
+    }
+
+    #[test]
+    fn hmi_write_queues_allowlisted_program_variable_write() {
+        let source = r#"
+PROGRAM Main
+VAR
+    run : BOOL := TRUE;
+END_VAR
+END_PROGRAM
+"#;
+        let root = temp_dir("hmi-write-program");
+        write_file(
+            &root.join("hmi.toml"),
+            r#"
+[write]
+enabled = true
+allow = ["resource/RESOURCE/program/Main/field/run"]
+"#,
+        );
+
+        let mut state = hmi_test_state(source);
+        state.project_root = Some(root.clone());
+
+        let response = handle_request_value(
+            json!({
+                "id": 4,
+                "type": "hmi.write",
+                "params": {
+                    "id": "resource/RESOURCE/program/Main/field/run",
+                    "value": false
+                }
+            }),
+            &state,
+            None,
+        );
+        assert!(response.ok, "hmi.write failed: {:?}", response.error);
+        let result = response.result.expect("hmi.write result");
+        assert_eq!(
+            result.get("status").and_then(serde_json::Value::as_str),
+            Some("queued")
+        );
+        assert_eq!(
+            result.get("id").and_then(serde_json::Value::as_str),
+            Some("resource/RESOURCE/program/Main/field/run")
+        );
+
+        let writes = state.debug.drain_var_writes();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].value, Value::Bool(false));
+        match &writes[0].target {
+            PendingVarTarget::Instance(_, name) => assert_eq!(name.as_str(), "run"),
+            other => panic!("expected instance write, got {other:?}"),
+        }
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn hmi_write_supports_path_allowlist_and_alias_param() {
+        let source = r#"
+PROGRAM Main
+VAR
+    run : BOOL := TRUE;
+END_VAR
+END_PROGRAM
+"#;
+        let root = temp_dir("hmi-write-path");
+        write_file(
+            &root.join("hmi.toml"),
+            r#"
+[write]
+enabled = true
+allow = ["Main.run"]
+"#,
+        );
+
+        let mut state = hmi_test_state(source);
+        state.project_root = Some(root.clone());
+
+        let response = handle_request_value(
+            json!({
+                "id": 5,
+                "type": "hmi.write",
+                "params": {
+                    "path": "Main.run",
+                    "value": "FALSE"
+                }
+            }),
+            &state,
+            None,
+        );
+        assert!(response.ok, "hmi.write failed: {:?}", response.error);
+        let writes = state.debug.drain_var_writes();
+        assert_eq!(writes.len(), 1);
+        assert_eq!(writes[0].value, Value::Bool(false));
+
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn hmi_write_rejects_non_allowlisted_target() {
+        let source = r#"
+PROGRAM Main
+VAR
+    run : BOOL := TRUE;
+END_VAR
+END_PROGRAM
+"#;
+        let root = temp_dir("hmi-write-denied");
+        write_file(
+            &root.join("hmi.toml"),
+            r#"
+[write]
+enabled = true
+allow = ["resource/RESOURCE/program/Main/field/other"]
+"#,
+        );
+
+        let mut state = hmi_test_state(source);
+        state.project_root = Some(root.clone());
+        let response = handle_request_value(
+            json!({
+                "id": 6,
+                "type": "hmi.write",
+                "params": {
+                    "id": "resource/RESOURCE/program/Main/field/run",
+                    "value": true
+                }
+            }),
+            &state,
+            None,
+        );
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_deref(),
+            Some("hmi.write target is not in allowlist")
+        );
+        assert!(state.debug.drain_var_writes().is_empty());
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn hmi_write_rejects_type_mismatch() {
+        let source = r#"
+PROGRAM Main
+VAR
+    run : BOOL := TRUE;
+END_VAR
+END_PROGRAM
+"#;
+        let root = temp_dir("hmi-write-type");
+        write_file(
+            &root.join("hmi.toml"),
+            r#"
+[write]
+enabled = true
+allow = ["resource/RESOURCE/program/Main/field/run"]
+"#,
+        );
+
+        let mut state = hmi_test_state(source);
+        state.project_root = Some(root.clone());
+        let response = handle_request_value(
+            json!({
+                "id": 7,
+                "type": "hmi.write",
+                "params": {
+                    "id": "resource/RESOURCE/program/Main/field/run",
+                    "value": 1
+                }
+            }),
+            &state,
+            None,
+        );
+        assert!(!response.ok);
+        assert_eq!(
+            response.error.as_deref(),
+            Some("invalid hmi.write value for target 'resource/RESOURCE/program/Main/field/run'")
+        );
+        assert!(state.debug.drain_var_writes().is_empty());
+        fs::remove_dir_all(root).ok();
     }
 
     #[test]
@@ -3580,6 +3999,25 @@ END_PROGRAM
             .as_deref()
             .is_some_and(|msg| msg.contains("requires role engineer")));
 
+        let operator_hmi_write = handle_request_value(
+            json!({
+                "id": 531,
+                "type": "hmi.write",
+                "auth": operator_token,
+                "params": { "id": "resource/RESOURCE/program/Main/field/run", "value": false }
+            }),
+            &state,
+            None,
+        );
+        assert!(
+            !operator_hmi_write.ok,
+            "operator must not write HMI targets"
+        );
+        assert!(operator_hmi_write
+            .error
+            .as_deref()
+            .is_some_and(|msg| msg.contains("requires role engineer")));
+
         let engineer_write = handle_request_value(
             json!({
                 "id": 54,
@@ -3591,6 +4029,25 @@ END_PROGRAM
             None,
         );
         assert!(engineer_write.ok, "engineer should write I/O");
+
+        let engineer_hmi_write = handle_request_value(
+            json!({
+                "id": 541,
+                "type": "hmi.write",
+                "auth": engineer_token,
+                "params": { "id": "resource/RESOURCE/program/Main/field/run", "value": false }
+            }),
+            &state,
+            None,
+        );
+        assert!(
+            !engineer_hmi_write.ok,
+            "engineer write should still be gated by read-only defaults"
+        );
+        assert_eq!(
+            engineer_hmi_write.error.as_deref(),
+            Some("hmi.write disabled in read-only mode")
+        );
 
         let engineer_pair_start = handle_request_value(
             json!({"id": 55, "type": "pair.start", "auth": engineer_token}),

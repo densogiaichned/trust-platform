@@ -1633,11 +1633,13 @@ HMI customization (implementer-specific):
 - `hmi.schema.get` returns `theme`, `pages`, and widget-level layout metadata (`page`, `group`, `order`, `unit`, bounds) in addition to stable widget IDs.
 - Project-level `hmi.toml` supports:
   - `[theme]` (`style`, optional `accent`)
+  - `[write]` (`enabled`, `allow`) for explicit writable-target allowlists.
   - `[[pages]]` (`id`, `title`, `order`)
   - `[widgets.\"<path>\"]` overrides for label/unit/bounds/widget/page/group/order.
 - ST-level `@hmi(...)` annotations on variable declarations support `label`, `unit`, `min`, `max`, `widget`, `page`, `group`, and `order`.
 - Merge precedence is deterministic: defaults < ST annotations < `hmi.toml` overrides.
 - Theme fallback is deterministic: unknown/missing theme values fall back to built-in `classic`.
+- `hmi.write` remains disabled unless `[write].enabled = true`, and writes are accepted only for explicit allowlist matches (`id` or `path`) with control authz enforcement.
 
 Operational UX and pairing flow are documented internally.
 
