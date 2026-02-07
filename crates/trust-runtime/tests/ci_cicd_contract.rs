@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let nanos = SystemTime::now()
@@ -127,6 +127,30 @@ fn ci_template_workflow_passes_on_green_fixture() {
     assert!(
         junit.contains("failures=\"0\""),
         "expected no junit failures"
+    );
+
+    let _ = std::fs::remove_dir_all(project);
+}
+
+#[test]
+fn ci_clean_setup_first_passing_test_is_under_ten_minutes() {
+    let project = copy_fixture("green");
+    let started = Instant::now();
+
+    let build = run_trust_runtime(&project, &["build", "--ci"]);
+    assert_success(&build, "build --ci");
+
+    let validate = run_trust_runtime(&project, &["validate", "--ci"]);
+    assert_success(&validate, "validate --ci");
+
+    let tests = run_trust_runtime(&project, &["test", "--ci", "--output", "json"]);
+    assert_success(&tests, "test --ci --output json");
+
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(600),
+        "expected first passing test path under 10 minutes, got {:.2}s",
+        elapsed.as_secs_f64()
     );
 
     let _ = std::fs::remove_dir_all(project);
