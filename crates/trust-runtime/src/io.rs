@@ -6,6 +6,8 @@ use smol_str::SmolStr;
 
 mod modbus;
 pub use modbus::ModbusTcpDriver;
+mod mqtt;
+pub use mqtt::MqttIoDriver;
 mod gpio;
 mod loopback;
 mod registry;

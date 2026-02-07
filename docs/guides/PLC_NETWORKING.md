@@ -7,6 +7,7 @@ This guide explains which ports are used and how to enable remote access safely.
 - Web UI: **8080** (HTTP)
 - Discovery: **mDNS** (UDP 5353)
 - Mesh/data: **5200** (TCP/UDP as configured)
+- MQTT broker (if `io.driver = "mqtt"`): **1883** (TCP, broker-defined)
 
 ## Local‑only by default
 
@@ -21,6 +22,7 @@ trueST ships in local‑only mode by default. To enable remote access:
 - Allow inbound TCP 8080 for Web UI (if remote web access is required).
 - Allow UDP 5353 for discovery (LAN only).
 - Allow TCP/UDP 5200 if mesh is enabled.
+- Allow TCP 1883 only when MQTT integration is explicitly enabled.
 
 ## Recommended remote access options
 

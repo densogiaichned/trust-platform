@@ -6,7 +6,9 @@ use smol_str::SmolStr;
 
 use crate::error::RuntimeError;
 
-use super::{GpioDriver, IoDriver, LoopbackIoDriver, ModbusTcpDriver, SimulatedIoDriver};
+use super::{
+    GpioDriver, IoDriver, LoopbackIoDriver, ModbusTcpDriver, MqttIoDriver, SimulatedIoDriver,
+};
 
 pub struct IoDriverRegistry {
     entries: HashMap<SmolStr, IoDriverRegistryEntry>,
@@ -51,6 +53,9 @@ impl IoDriverRegistry {
 
         registry.register("modbus-tcp", create_modbus_tcp, validate_modbus_tcp);
         registry.register_alias("modbus_tcp", "modbus-tcp");
+
+        registry.register("mqtt", create_mqtt, validate_mqtt);
+        registry.register_alias("mqtt-tcp", "mqtt");
         registry
     }
 
@@ -151,5 +156,15 @@ fn validate_modbus_tcp(params: &toml::Value) -> Result<(), RuntimeError> {
 
 fn create_modbus_tcp(params: &toml::Value) -> Result<Box<dyn IoDriver>, RuntimeError> {
     let driver = ModbusTcpDriver::from_params(params)?;
+    Ok(Box::new(driver))
+}
+
+fn validate_mqtt(params: &toml::Value) -> Result<(), RuntimeError> {
+    MqttIoDriver::validate_params(params)?;
+    Ok(())
+}
+
+fn create_mqtt(params: &toml::Value) -> Result<Box<dyn IoDriver>, RuntimeError> {
+    let driver = MqttIoDriver::from_params(params)?;
     Ok(Box::new(driver))
 }

@@ -1471,11 +1471,24 @@ Driver error handling is configurable per driver:
 
 Driver health is exposed via `ctl status` and the TUI.
 
-**Built-in driver (v1): Modbus/TCP**
+**Built-in drivers**
+
+1. **Modbus/TCP**
 - Uses **input registers** (0x04) for input image.
 - Uses **holding registers** (0x10) for output image.
 - Register payloads are big‑endian (high byte first).
 - Register quantity is derived from the process image size (`ceil(bytes / 2)`).
+
+2. **MQTT (baseline profile)**
+- Topic bridge between broker payloads and process image bytes.
+- `topic_in` payload bytes are copied into `%I` at cycle start.
+- `%Q` output bytes are published to `topic_out` at cycle end.
+- Reconnection is non-blocking; runtime cycle remains deterministic.
+- Security baseline rejects insecure remote brokers unless explicitly overridden.
+
+Protocol roadmap priority after OPC UA baseline:
+- First: MQTT
+- Next: EtherNet/IP
 
 #### 6.6 Fault, Overrun, and Watchdog Handling
 

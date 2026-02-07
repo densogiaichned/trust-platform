@@ -94,6 +94,12 @@ For Modbus/TCP:
 - Click **Test connection**
 - Save I/O config, then restart the runtime
 
+For MQTT:
+- Select `mqtt`
+- Enter broker (`host:port`) and `topic_in`/`topic_out`
+- Keep insecure mode local-only unless intentionally overridden
+- Save I/O config, then restart the runtime
+
 For GPIO:
 - Select `gpio`
 - Add inputs/outputs with IEC addresses and GPIO pins

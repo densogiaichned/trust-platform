@@ -15,7 +15,10 @@ pub struct IoConfigTemplate {
 
 /// Build a default io.toml template for a driver.
 pub fn build_io_config_auto(driver: &str) -> anyhow::Result<IoConfigTemplate> {
-    if !matches!(driver, "loopback" | "gpio" | "modbus-tcp" | "simulated") {
+    if !matches!(
+        driver,
+        "loopback" | "gpio" | "modbus-tcp" | "simulated" | "mqtt"
+    ) {
         anyhow::bail!("unknown driver '{driver}'");
     }
     let safe_state = vec![("%QX0.0".to_string(), "FALSE".to_string())];
@@ -59,6 +62,29 @@ pub fn build_io_config_auto(driver: &str) -> anyhow::Result<IoConfigTemplate> {
         return Ok(IoConfigTemplate {
             driver: "simulated".to_string(),
             params: toml::Value::Table(toml::map::Map::new()),
+            safe_state,
+        });
+    }
+    if driver.eq_ignore_ascii_case("mqtt") {
+        let mut params = toml::map::Map::new();
+        params.insert(
+            "broker".into(),
+            toml::Value::String("127.0.0.1:1883".to_string()),
+        );
+        params.insert(
+            "topic_in".into(),
+            toml::Value::String("trust/io/in".to_string()),
+        );
+        params.insert(
+            "topic_out".into(),
+            toml::Value::String("trust/io/out".to_string()),
+        );
+        params.insert("reconnect_ms".into(), toml::Value::Integer(500));
+        params.insert("keep_alive_s".into(), toml::Value::Integer(5));
+        params.insert("allow_insecure_remote".into(), toml::Value::Boolean(false));
+        return Ok(IoConfigTemplate {
+            driver: "mqtt".to_string(),
+            params: toml::Value::Table(params),
             safe_state,
         });
     }

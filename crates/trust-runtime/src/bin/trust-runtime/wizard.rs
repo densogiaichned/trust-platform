@@ -82,7 +82,11 @@ pub fn create_bundle(path: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     let resource_name = SmolStr::new(format_resource_name(&project_name));
     let cycle_ms = prompt_u64("Cycle time (ms)", 100)?;
     let driver_default = default_driver();
-    let driver = prompt_choice("I/O driver", &["loopback", "gpio"], driver_default.as_str())?;
+    let driver = prompt_choice(
+        "I/O driver",
+        &["loopback", "gpio", "simulated", "modbus-tcp", "mqtt"],
+        driver_default.as_str(),
+    )?;
     let io_config = build_io_config(&driver)?;
 
     let runtime_text = render_runtime_toml(&resource_name, cycle_ms);
@@ -228,13 +232,8 @@ fn ensure_gitignore(root: &Path) -> anyhow::Result<()> {
 }
 
 fn build_io_config(driver: &str) -> anyhow::Result<IoConfigTemplate> {
-    if !matches!(driver, "loopback" | "gpio") {
-        anyhow::bail!(
-            "Invalid I/O driver '{driver}'. Expected: loopback, gpio. Tip: run trust-runtime wizard to reconfigure."
-        );
-    }
-    let safe_state = vec![("%QX0.0".to_string(), "FALSE".to_string())];
     if driver.eq_ignore_ascii_case("gpio") {
+        let safe_state = vec![("%QX0.0".to_string(), "FALSE".to_string())];
         let input_line = prompt_u64("GPIO input line for %IX0.0", 17)?;
         let output_line = prompt_u64("GPIO output line for %QX0.0", 27)?;
         let mut params = toml::map::Map::new();
@@ -255,11 +254,7 @@ fn build_io_config(driver: &str) -> anyhow::Result<IoConfigTemplate> {
             safe_state,
         });
     }
-    Ok(IoConfigTemplate {
-        driver: "loopback".to_string(),
-        params: toml::Value::Table(toml::map::Map::new()),
-        safe_state,
-    })
+    build_io_config_auto(driver)
 }
 
 fn render_main_source() -> String {

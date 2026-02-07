@@ -75,15 +75,21 @@ fn build_driver_params(
     if driver.eq_ignore_ascii_case("gpio") {
         return build_gpio_params(backend);
     }
-    if !driver.eq_ignore_ascii_case("loopback") {
-        return Err(RuntimeError::InvalidConfig(
-            format!(
-                "invalid I/O driver '{driver}'. Expected: gpio or loopback. Tip: run trust-runtime wizard to reconfigure."
-            )
-            .into(),
-        ));
+    if driver.eq_ignore_ascii_case("modbus-tcp") {
+        return Ok(default_modbus_params());
     }
-    Ok(toml::Value::Table(toml::map::Map::new()))
+    if driver.eq_ignore_ascii_case("mqtt") {
+        return Ok(default_mqtt_params());
+    }
+    if driver.eq_ignore_ascii_case("simulated") || driver.eq_ignore_ascii_case("loopback") {
+        return Ok(toml::Value::Table(toml::map::Map::new()));
+    }
+    Err(RuntimeError::InvalidConfig(
+        format!(
+            "invalid I/O driver '{driver}'. Expected: loopback, gpio, simulated, modbus-tcp, or mqtt."
+        )
+        .into(),
+    ))
 }
 
 fn build_gpio_params(backend: Option<SmolStr>) -> Result<toml::Value, RuntimeError> {
@@ -93,6 +99,40 @@ fn build_gpio_params(backend: Option<SmolStr>) -> Result<toml::Value, RuntimeErr
     params.insert("inputs".into(), toml::Value::Array(Vec::new()));
     params.insert("outputs".into(), toml::Value::Array(Vec::new()));
     Ok(toml::Value::Table(params))
+}
+
+fn default_modbus_params() -> toml::Value {
+    let mut params = toml::map::Map::new();
+    params.insert(
+        "address".into(),
+        toml::Value::String("127.0.0.1:502".to_string()),
+    );
+    params.insert("unit_id".into(), toml::Value::Integer(1));
+    params.insert("input_start".into(), toml::Value::Integer(0));
+    params.insert("output_start".into(), toml::Value::Integer(0));
+    params.insert("timeout_ms".into(), toml::Value::Integer(500));
+    params.insert("on_error".into(), toml::Value::String("fault".to_string()));
+    toml::Value::Table(params)
+}
+
+fn default_mqtt_params() -> toml::Value {
+    let mut params = toml::map::Map::new();
+    params.insert(
+        "broker".into(),
+        toml::Value::String("127.0.0.1:1883".to_string()),
+    );
+    params.insert(
+        "topic_in".into(),
+        toml::Value::String("trust/io/in".to_string()),
+    );
+    params.insert(
+        "topic_out".into(),
+        toml::Value::String("trust/io/out".to_string()),
+    );
+    params.insert("reconnect_ms".into(), toml::Value::Integer(500));
+    params.insert("keep_alive_s".into(), toml::Value::Integer(5));
+    params.insert("allow_insecure_remote".into(), toml::Value::Boolean(false));
+    toml::Value::Table(params)
 }
 
 fn write_system_io_config(path: &Path, config: &IoConfig) -> Result<(), RuntimeError> {

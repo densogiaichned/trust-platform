@@ -65,6 +65,8 @@ Key sections:
 
 See `docs/guides/PLC_IO_BINDING_GUIDE.md` for full examples.
 
+Supported `io.driver` values include `loopback`, `simulated`, `gpio`, `modbus-tcp`, and `mqtt`.
+
 ## Browser UI (Operations)
 
 If enabled:
