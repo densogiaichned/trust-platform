@@ -22,7 +22,7 @@ use crate::control::{handle_request_value, ControlState};
 use crate::debug::dap::format_value;
 use crate::discovery::DiscoveryState;
 use crate::error::RuntimeError;
-use crate::io::{IoAddress, IoSize};
+use crate::io::{IoAddress, IoDriverRegistry, IoSize};
 use crate::memory::IoArea;
 use crate::security::{AccessRole, TlsMaterials};
 use crate::setup::SetupOptions;
@@ -65,6 +65,7 @@ struct IoConfigResponse {
     driver: String,
     params: serde_json::Value,
     safe_state: Vec<IoSafeStateEntry>,
+    supported_drivers: Vec<String>,
     source: String,
     use_system_io: bool,
 }
@@ -93,6 +94,7 @@ struct SetupDefaultsResponse {
     resource_name: String,
     cycle_ms: u64,
     driver: String,
+    supported_drivers: Vec<String>,
     use_system_io: bool,
     system_io_exists: bool,
     write_system_io: bool,
@@ -171,6 +173,7 @@ fn setup_defaults(bundle_root: &Option<PathBuf>) -> SetupDefaultsResponse {
         resource_name,
         cycle_ms,
         driver,
+        supported_drivers: IoDriverRegistry::default_registry().canonical_driver_names(),
         use_system_io,
         system_io_exists,
         write_system_io,
@@ -255,6 +258,7 @@ fn load_io_config(bundle_root: &Option<PathBuf>) -> Result<IoConfigResponse, Run
             driver,
             params: params_json,
             safe_state,
+            supported_drivers: IoDriverRegistry::default_registry().canonical_driver_names(),
             source: "project".to_string(),
             use_system_io: false,
         });
@@ -274,6 +278,7 @@ fn load_io_config(bundle_root: &Option<PathBuf>) -> Result<IoConfigResponse, Run
             driver: system.driver.to_string(),
             params: params_json,
             safe_state,
+            supported_drivers: IoDriverRegistry::default_registry().canonical_driver_names(),
             source: "system".to_string(),
             use_system_io: true,
         });
@@ -282,6 +287,7 @@ fn load_io_config(bundle_root: &Option<PathBuf>) -> Result<IoConfigResponse, Run
         driver: detect_default_driver(),
         params: json!({}),
         safe_state: Vec::new(),
+        supported_drivers: IoDriverRegistry::default_registry().canonical_driver_names(),
         source: "default".to_string(),
         use_system_io: false,
     })

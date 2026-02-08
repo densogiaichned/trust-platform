@@ -36,6 +36,8 @@ let refreshTimer = null;
 let discoveryTimer = null;
 let initialLoad = true;
 
+const fallbackSupportedIoDrivers = ['gpio', 'loopback', 'modbus-tcp', 'simulated', 'mqtt'];
+
 const pageTitles = {
   overview: 'PLC Overview',
   io: 'I/O',
@@ -47,6 +49,37 @@ const pageTitles = {
 };
 
 const tabGroups = new Map();
+
+function uniqueIoDrivers(drivers) {
+  const names = Array.isArray(drivers)
+    ? drivers.map(value => String(value || '').trim()).filter(Boolean)
+    : [];
+  const seen = new Set();
+  const deduped = [];
+  for (const name of names) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    deduped.push(name);
+  }
+  return deduped.length ? deduped : fallbackSupportedIoDrivers;
+}
+
+function populateDriverSelect(selectId, drivers, includeAuto = false) {
+  const select = document.getElementById(selectId);
+  if (!select) return;
+  const options = uniqueIoDrivers(drivers);
+  const current = select.value;
+  const values = includeAuto ? ['auto', ...options] : [...options];
+  if (current && !values.includes(current)) {
+    values.push(current);
+  }
+  select.innerHTML = values
+    .map(value => `<option value="${value}">${value}</option>`)
+    .join('');
+  if (current) {
+    select.value = current;
+  }
+}
 
 function escapeHtml(value) {
   return String(value || '')
@@ -999,8 +1032,10 @@ function updateIoDriverPanels() {
   const driver = document.getElementById('ioDriverSelect')?.value;
   const modbus = document.getElementById('ioDriverModbus');
   const gpio = document.getElementById('ioDriverGpio');
+  const mqtt = document.getElementById('ioDriverMqtt');
   if (modbus) modbus.hidden = driver !== 'modbus-tcp';
   if (gpio) gpio.hidden = driver !== 'gpio';
+  if (mqtt) mqtt.hidden = driver !== 'mqtt';
   if (driver === 'gpio') {
     ioConfigState.params = ioConfigState.params || {};
     ioConfigState.params.inputs = ioConfigState.params.inputs || [];
@@ -1127,13 +1162,18 @@ function removeSafeState(index) {
 }
 
 async function loadIoConfig() {
+  let supportedDrivers = fallbackSupportedIoDrivers;
+  let configuredDriver = 'loopback';
   try {
     const res = await fetch('/api/io/config');
     const data = await res.json();
+    supportedDrivers = uniqueIoDrivers(data?.supported_drivers);
     ioConfigState = Object.assign({ driver: 'loopback', params: {}, safe_state: [], use_system_io: false, source: 'project' }, data || {});
+    configuredDriver = String(ioConfigState.driver || 'loopback');
   } catch (err) {
     ioConfigState = { driver: 'loopback', params: {}, safe_state: [], use_system_io: false, source: 'default' };
   }
+  populateDriverSelect('ioDriverSelect', [...supportedDrivers, configuredDriver]);
   ioConfigOriginal = JSON.parse(JSON.stringify(ioConfigState));
   const driverSelect = document.getElementById('ioDriverSelect');
   if (driverSelect) {
@@ -1177,6 +1217,26 @@ async function loadIoConfig() {
   if (modbusError) modbusError.value = ioConfigState.params.on_error || 'fault';
   const gpioBackend = document.getElementById('gpioBackend');
   if (gpioBackend) gpioBackend.value = ioConfigState.params.backend || 'sysfs';
+  const mqttBroker = document.getElementById('mqttBroker');
+  if (mqttBroker) mqttBroker.value = ioConfigState.params.broker || '127.0.0.1:1883';
+  const mqttClientId = document.getElementById('mqttClientId');
+  if (mqttClientId) mqttClientId.value = ioConfigState.params.client_id || '';
+  const mqttTopicIn = document.getElementById('mqttTopicIn');
+  if (mqttTopicIn) mqttTopicIn.value = ioConfigState.params.topic_in || 'trust/io/in';
+  const mqttTopicOut = document.getElementById('mqttTopicOut');
+  if (mqttTopicOut) mqttTopicOut.value = ioConfigState.params.topic_out || 'trust/io/out';
+  const mqttReconnectMs = document.getElementById('mqttReconnectMs');
+  if (mqttReconnectMs) mqttReconnectMs.value = ioConfigState.params.reconnect_ms ?? 500;
+  const mqttKeepAliveS = document.getElementById('mqttKeepAliveS');
+  if (mqttKeepAliveS) mqttKeepAliveS.value = ioConfigState.params.keep_alive_s ?? 5;
+  const mqttAllowInsecure = document.getElementById('mqttAllowInsecureRemote');
+  if (mqttAllowInsecure) {
+    mqttAllowInsecure.value = String(ioConfigState.params.allow_insecure_remote ?? false);
+  }
+  const mqttUsername = document.getElementById('mqttUsername');
+  if (mqttUsername) mqttUsername.value = ioConfigState.params.username || '';
+  const mqttPassword = document.getElementById('mqttPassword');
+  if (mqttPassword) mqttPassword.value = ioConfigState.params.password || '';
   renderGpioInputs();
   renderGpioOutputs();
   renderSafeState();
@@ -1218,6 +1278,34 @@ async function saveIoConfig() {
         initial: String(entry.initial || '').toLowerCase() === 'true' || entry.initial === true,
       })).filter(entry => entry.address),
     };
+  } else if (driver === 'mqtt') {
+    const broker = document.getElementById('mqttBroker')?.value.trim() || '127.0.0.1:1883';
+    const topicIn = document.getElementById('mqttTopicIn')?.value.trim() || 'trust/io/in';
+    const topicOut = document.getElementById('mqttTopicOut')?.value.trim() || 'trust/io/out';
+    const username = document.getElementById('mqttUsername')?.value.trim() || '';
+    const password = document.getElementById('mqttPassword')?.value || '';
+    if (!broker) {
+      setStatus('ioConfigStatus', 'MQTT broker is required before saving.', 'error');
+      return;
+    }
+    if ((username && !password) || (!username && password)) {
+      setStatus('ioConfigStatus', 'MQTT username/password must both be set or both be empty.', 'error');
+      return;
+    }
+    params = {
+      broker,
+      topic_in: topicIn,
+      topic_out: topicOut,
+      reconnect_ms: normalizeNumber(document.getElementById('mqttReconnectMs')?.value, 500),
+      keep_alive_s: normalizeNumber(document.getElementById('mqttKeepAliveS')?.value, 5),
+      allow_insecure_remote: document.getElementById('mqttAllowInsecureRemote')?.value === 'true',
+    };
+    const clientId = document.getElementById('mqttClientId')?.value.trim() || '';
+    if (clientId) params.client_id = clientId;
+    if (username && password) {
+      params.username = username;
+      params.password = password;
+    }
   } else {
     params = {};
   }
@@ -1729,6 +1817,7 @@ async function loadSetupDefaults() {
   if (!res.ok) return;
   const defaults = await res.json();
   if (!defaults || !(defaults.project_path || defaults.bundle_path)) return;
+  populateDriverSelect('setupDriver', [...uniqueIoDrivers(defaults.supported_drivers), String(defaults.driver || '')], true);
   needsSetup = defaults.needs_setup === true;
   document.getElementById('setupProjectPath').value = defaults.project_path || defaults.bundle_path || '';
   document.getElementById('setupPlcName').value = defaults.resource_name || '';
