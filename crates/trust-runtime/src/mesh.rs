@@ -22,6 +22,11 @@ use crate::scheduler::{ResourceCommand, ResourceControl, StdClock};
 use crate::security::{rustls_client_config, rustls_server_config, TlsMaterials};
 use crate::value::Value;
 
+#[cfg(not(test))]
+const MESH_SNAPSHOT_TIMEOUT: StdDuration = StdDuration::from_millis(200);
+#[cfg(test)]
+const MESH_SNAPSHOT_TIMEOUT: StdDuration = StdDuration::from_millis(750);
+
 #[derive(Debug)]
 pub struct MeshService {
     // Reserved for diagnostics/status surfaces once mesh management commands are exposed.
@@ -223,6 +228,10 @@ fn send_publish_tls(
     let connection = ClientConnection::new(client_config, server_name)
         .map_err(|err| RuntimeError::ControlError(format!("mesh tls connect: {err}").into()))?;
     let mut stream = StreamOwned::new(connection, stream);
+    stream
+        .conn
+        .complete_io(&mut stream.sock)
+        .map_err(|err| RuntimeError::ControlError(format!("mesh tls handshake: {err}").into()))?;
     let msg = MeshMessage {
         r#type: "publish".into(),
         from: state.name.to_string(),
@@ -234,7 +243,10 @@ fn send_publish_tls(
         .map_err(|err| RuntimeError::ControlError(format!("mesh tls send: {err}").into()))?;
     stream
         .flush()
-        .map_err(|err| RuntimeError::ControlError(format!("mesh tls flush: {err}").into()))
+        .map_err(|err| RuntimeError::ControlError(format!("mesh tls flush: {err}").into()))?;
+    stream.conn.send_close_notify();
+    let _ = stream.conn.complete_io(&mut stream.sock);
+    Ok(())
 }
 
 fn mesh_server_name(target: &SocketAddr) -> Result<ServerName, RuntimeError> {
@@ -293,8 +305,7 @@ fn snapshot_globals(
 }
 
 fn wait_snapshot(rx: Receiver<IndexMap<SmolStr, Value>>) -> IndexMap<SmolStr, Value> {
-    rx.recv_timeout(StdDuration::from_millis(200))
-        .unwrap_or_default()
+    rx.recv_timeout(MESH_SNAPSHOT_TIMEOUT).unwrap_or_default()
 }
 
 fn value_to_json(value: &Value) -> Option<serde_json::Value> {
@@ -411,7 +422,9 @@ mod tests {
         let addr = listener.local_addr().expect("tls mesh addr");
         let (resource, cmd_rx) = ResourceControl::stub(StdClock::new());
         let (apply_tx, apply_rx) = mpsc::channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
         std::thread::spawn(move || {
+            let _ = ready_tx.send(());
             while let Ok(command) = cmd_rx.recv() {
                 match command {
                     ResourceCommand::MeshSnapshot { names, respond_to } => {
@@ -428,6 +441,9 @@ mod tests {
                 }
             }
         });
+        ready_rx
+            .recv_timeout(StdDuration::from_secs(1))
+            .map_err(|err| format!("mesh snapshot worker startup: {err:?}"))?;
 
         let listener_state = MeshState {
             name: SmolStr::new("listener"),
