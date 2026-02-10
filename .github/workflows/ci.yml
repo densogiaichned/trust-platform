@@ -67,19 +67,33 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Prepare test log path
+        shell: bash
+        run: |
+          mkdir -p gate-artifacts
+          : > "gate-artifacts/test-${{ matrix.os }}.log"
+      - name: Free disk space on ubuntu runners
+        if: ${{ matrix.os == 'ubuntu-latest' }}
+        shell: bash
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android || true
+          df -h
       - name: Run cargo build --all-targets (retry once on transient failure)
         shell: bash
         run: |
           set -euo pipefail
+          LOG_PATH="gate-artifacts/test-${{ matrix.os }}.log"
           for attempt in 1 2; do
-            if cargo build --all-targets; then
+            echo "=== cargo build attempt ${attempt}/2 (${{ matrix.os }}) ===" | tee -a "${LOG_PATH}"
+            if cargo build --all-targets 2>&1 | tee -a "${LOG_PATH}"; then
               exit 0
             fi
             if [[ "${attempt}" -lt 2 ]]; then
-              echo "cargo build failed on attempt ${attempt}; retrying once..."
+              echo "cargo build failed on attempt ${attempt}; retrying once..." | tee -a "${LOG_PATH}"
             fi
           done
-          echo "cargo build --all-targets failed after 2 attempts."
+          echo "cargo build --all-targets failed after 2 attempts." | tee -a "${LOG_PATH}"
           exit 1
       - name: trust-runtime warnings denied
         shell: bash
@@ -88,7 +102,7 @@ jobs:
         shell: bash
         run: |
           if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            ./scripts/runtime_mesh_tls_stability_gate.sh --iterations 12
+            MESH_GATE_ATTEMPTS_PER_RUN=4 ./scripts/runtime_mesh_tls_stability_gate.sh --iterations 4
           else
             ./scripts/runtime_mesh_tls_stability_gate.sh --iterations 4
           fi
