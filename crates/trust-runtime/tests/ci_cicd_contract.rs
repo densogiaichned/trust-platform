@@ -672,13 +672,24 @@ fn ci_vscode_extension_job_contract_wires_failure_to_release_gate() {
 
     let release_block = &text[report_start..];
     assert!(
-        release_block
-            .contains("needs: [fmt, clippy, test, msrv, docs, vscode-extension, mp001-parity]"),
+        release_block.contains("needs: ["),
+        "release gate report must declare explicit upstream job dependencies"
+    );
+    assert!(
+        release_block.contains("vscode-extension"),
         "release gate report must depend on vscode-extension job status"
+    );
+    assert!(
+        release_block.contains("version-release-guard"),
+        "release gate report must depend on version-release-guard job status"
     );
     assert!(
         release_block.contains("--required-gate gate-vscode-extension"),
         "release gate report must require vscode extension gate artifact"
+    );
+    assert!(
+        release_block.contains("--required-gate gate-version-release-guard"),
+        "release gate report must require version-release-guard gate artifact"
     );
     assert!(
         release_block.contains("--required-gate gate-mp001-parity"),

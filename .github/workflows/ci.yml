@@ -279,10 +279,42 @@ jobs:
           name: gate-mp001-parity
           path: gate-artifacts/mp001-parity.txt
 
+  version-release-guard:
+    name: Version Release Guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Validate version bump release evidence
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/check_version_release_evidence.py \
+            --event-name "${{ github.event_name }}" \
+            --ref "${{ github.ref }}" \
+            --before "${{ github.event.before }}" \
+            --after "${{ github.sha }}" \
+            --repo "${{ github.repository }}"
+      - name: Mark gate success
+        if: ${{ success() }}
+        run: |
+          mkdir -p gate-artifacts
+          echo "job=version-release-guard result=success" > gate-artifacts/version-release-guard.txt
+      - name: Upload gate marker
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-version-release-guard
+          path: gate-artifacts/version-release-guard.txt
+
   release-gate-report:
     name: Release Gate Report
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, test, msrv, docs, vscode-extension, mp001-parity]
+    needs: [fmt, clippy, test, msrv, docs, vscode-extension, mp001-parity, version-release-guard]
     if: ${{ always() }}
     steps:
       - uses: actions/checkout@v4
@@ -306,6 +338,7 @@ jobs:
           NEED_DOCS: ${{ needs.docs.result }}
           NEED_VSCODE_EXTENSION: ${{ needs['vscode-extension'].result }}
           NEED_MP001_PARITY: ${{ needs['mp001-parity'].result }}
+          NEED_VERSION_RELEASE_GUARD: ${{ needs['version-release-guard'].result }}
         run: |
           python3 scripts/generate_release_gate_report.py \
             --output-dir gate-report \
@@ -319,6 +352,7 @@ jobs:
             --required-gate gate-docs \
             --required-gate gate-vscode-extension \
             --required-gate gate-mp001-parity \
+            --required-gate gate-version-release-guard \
             --job-status "fmt=${NEED_FMT}" \
             --job-status "clippy=${NEED_CLIPPY}" \
             --job-status "test=${NEED_TEST}" \
@@ -326,6 +360,7 @@ jobs:
             --job-status "docs=${NEED_DOCS}" \
             --job-status "vscode-extension=${NEED_VSCODE_EXTENSION}" \
             --job-status "mp001-parity=${NEED_MP001_PARITY}" \
+            --job-status "version-release-guard=${NEED_VERSION_RELEASE_GUARD}" \
             --checklist docs/release-gate-checklist.md
 
       - name: Upload release gate report
