@@ -69,6 +69,7 @@ code --install-extension trust-platform.trust-lsp
 - Go to definition/references, call hierarchy, type hierarchy, and workspace symbols.
 - Inline values + I/O panel driven by the runtime control endpoint.
 - DAP debugging with breakpoints, stepping, and variables.
+- Deterministic conformance runner via `trust-runtime conformance`.
 
 ---
 
@@ -139,6 +140,7 @@ starts a local runtime for debugging and inline values.
 - `docs/README.md` — documentation index and diagram workflow
 - `docs/guides/PLC_QUICK_START.md` — hands-on quick start
 - `docs/specs/README.md` — IEC 61131-3 specs and tooling references
+- `conformance/README.md` — conformance suite MVP scope and contracts
 
 ---
 

@@ -13,6 +13,12 @@ See `docs/reports/README.md` for what is kept there vs. what should go to `logs/
 
 Implementation planning notes and remediation checklists live in `docs/internal/`.
 
+## Conformance Suite
+
+Conformance scope, naming rules, and summary-contract artifacts are in
+`conformance/README.md`.
+External comparison guidance is in `conformance/external-run-guide.md`.
+
 ## Diagram Maintenance
 
 Use the helper scripts to keep PlantUML diagrams in sync:

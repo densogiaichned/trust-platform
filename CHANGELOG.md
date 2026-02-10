@@ -6,10 +6,21 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.3.0`
+Target release: `v0.4.0`
 
 ### Added
 
+- Conformance Suite MVP shipped (Deliverable 1):
+  - deterministic case pack + versioned expected artifacts in `conformance/cases/` and `conformance/expected/`
+  - coverage for timers (TON/TOF/TP), edges, scan-cycle ordering, init/reset, arithmetic corner cases, and mapped memory behavior
+  - negative/error-path coverage for runtime overflow behavior and unresolved wildcard mapping compile errors
+  - external run guide and submission process (`conformance/external-run-guide.md`, `conformance/submissions.md`)
+  - explicit known-gaps register (`conformance/known-gaps.md`)
+- `trust-runtime conformance` CLI runner mode:
+  - deterministic `case_id` ordering
+  - machine-readable JSON summary contract (`trust-conformance-v1`)
+  - stable failure reason taxonomy (`conformance/failure-taxonomy.md`)
+  - `--update-expected` mode for deterministic artifact refresh
 - ST unit-testing tutorials:
   - `examples/tutorials/unit_testing_101/`
   - `examples/tutorials/unit_testing_102/`
@@ -33,6 +44,7 @@ Target release: `v0.3.0`
 - Migrated `trust-hir` semantic path to Salsa-only backend and upgraded Salsa to `0.26`.
 - Enabled VS Code extension integration tests in CI under virtual display (`xvfb`).
 - Expanded cancellation checks in workspace-scale LSP operations.
+- CI now includes a dedicated conformance gate with repeated-run deterministic comparison.
 - Documentation organization:
   - Public durable reports remain in `docs/reports/`.
   - Working remediation checklists are no longer published in `docs/reports/`.

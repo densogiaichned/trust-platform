@@ -258,6 +258,24 @@ pub enum Command {
         #[arg(value_enum)]
         shell: Shell,
     },
+    /// Run deterministic conformance suite cases.
+    #[command(
+        after_help = "Examples:\n  trust-runtime conformance\n  trust-runtime conformance --suite-root ./conformance --output ./conformance/reports/local.json\n  trust-runtime conformance --update-expected"
+    )]
+    Conformance {
+        /// Conformance suite root directory.
+        #[arg(long = "suite-root")]
+        suite_root: Option<PathBuf>,
+        /// Summary output file path (JSON).
+        #[arg(long = "output")]
+        output: Option<PathBuf>,
+        /// Refresh expected artifacts from current runtime behavior.
+        #[arg(long, action = ArgAction::SetTrue)]
+        update_expected: bool,
+        /// Optional case-insensitive substring filter for case IDs.
+        #[arg(long)]
+        filter: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -569,6 +587,35 @@ mod tests {
                 other => panic!("expected registry init action, got {other:?}"),
             },
             other => panic!("expected registry command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_conformance_command() {
+        let cli = Cli::parse_from([
+            "trust-runtime",
+            "conformance",
+            "--suite-root",
+            "conformance",
+            "--output",
+            "summary.json",
+            "--update-expected",
+            "--filter",
+            "timers",
+        ]);
+        match cli.command.expect("command") {
+            Command::Conformance {
+                suite_root,
+                output,
+                update_expected,
+                filter,
+            } => {
+                assert_eq!(suite_root, Some(PathBuf::from("conformance")));
+                assert_eq!(output, Some(PathBuf::from("summary.json")));
+                assert!(update_expected);
+                assert_eq!(filter.as_deref(), Some("timers"));
+            }
+            other => panic!("expected conformance command, got {other:?}"),
         }
     }
 }

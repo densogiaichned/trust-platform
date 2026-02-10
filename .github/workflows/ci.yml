@@ -151,6 +151,53 @@ jobs:
           name: gate-test-${{ matrix.os }}
           path: gate-artifacts/test-${{ matrix.os }}.txt
 
+  conformance:
+    name: Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run conformance suite (pass 1)
+        run: |
+          mkdir -p gate-artifacts
+          cargo run -p trust-runtime --bin trust-runtime -- \
+            conformance \
+            --suite-root conformance \
+            --output gate-artifacts/conformance-pass-1.json
+      - name: Run conformance suite (pass 2)
+        run: |
+          cargo run -p trust-runtime --bin trust-runtime -- \
+            conformance \
+            --suite-root conformance \
+            --output gate-artifacts/conformance-pass-2.json
+      - name: Verify deterministic ordering and statuses
+        run: |
+          jq 'del(.generated_at_utc) | .results |= map(del(.duration_ms))' \
+            gate-artifacts/conformance-pass-1.json > gate-artifacts/conformance-pass-1.normalized.json
+          jq 'del(.generated_at_utc) | .results |= map(del(.duration_ms))' \
+            gate-artifacts/conformance-pass-2.json > gate-artifacts/conformance-pass-2.normalized.json
+          diff -u \
+            gate-artifacts/conformance-pass-1.normalized.json \
+            gate-artifacts/conformance-pass-2.normalized.json
+      - name: Upload conformance artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-suite
+          path: gate-artifacts/conformance-pass-*.json
+      - name: Mark gate success
+        if: ${{ success() }}
+        run: |
+          mkdir -p gate-artifacts
+          echo "job=conformance result=success" > gate-artifacts/conformance.txt
+      - name: Upload gate marker
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-conformance
+          path: gate-artifacts/conformance.txt
+
   msrv:
     name: MSRV (1.85)
     runs-on: ubuntu-latest

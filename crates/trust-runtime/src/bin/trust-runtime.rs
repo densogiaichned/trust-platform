@@ -10,6 +10,8 @@ mod cli;
 mod commit;
 #[path = "trust-runtime/completions.rs"]
 mod completions;
+#[path = "trust-runtime/conformance.rs"]
+mod conformance;
 #[path = "trust-runtime/ctl.rs"]
 mod ctl;
 #[path = "trust-runtime/deploy.rs"]
@@ -217,6 +219,12 @@ fn run() -> anyhow::Result<()> {
         }
         Some(Command::Rollback { root }) => deploy::run_rollback(root),
         Some(Command::Completions { shell }) => completions::run_completions(shell),
+        Some(Command::Conformance {
+            suite_root,
+            output,
+            update_expected,
+            filter,
+        }) => conformance::run_conformance(suite_root, output, update_expected, filter),
     }
 }
 
@@ -242,6 +250,7 @@ fn suggest_subcommand(input: &str) -> Option<&'static str> {
         "rollback",
         "commit",
         "completions",
+        "conformance",
     ];
     let mut best = None;
     let mut best_score = usize::MAX;
