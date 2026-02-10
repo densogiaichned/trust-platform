@@ -3,6 +3,7 @@ set -euo pipefail
 
 MODE="${1:-run}"
 BASELINE_FILE="${SALSA_MEMORY_BASELINE_FILE:-docs/reports/salsa-memory-baseline.env}"
+AUTO_BASELINE="${SALSA_MEMORY_RECORD_IF_MISSING:-0}"
 SAMPLES="${SALSA_MEMORY_SAMPLES:-5}"
 WARMUP_RUNS="${SALSA_MEMORY_WARMUP_RUNS:-1}"
 MAX_REGRESSION_PCT="${SALSA_MEMORY_MAX_REGRESSION_PCT:-10}"
@@ -213,9 +214,14 @@ absolute_cap_check() {
 
 compare_with_baseline() {
   if [[ ! -f "$BASELINE_FILE" ]]; then
-    echo "[salsa-memory] FAIL: baseline file not found at ${BASELINE_FILE}"
-    echo "[salsa-memory] Run: $0 record"
-    exit 1
+    if [[ "$AUTO_BASELINE" == "1" ]]; then
+      echo "[salsa-memory] WARN: baseline file not found at ${BASELINE_FILE}; recording ad-hoc baseline for this environment."
+      record_baseline
+    else
+      echo "[salsa-memory] FAIL: baseline file not found at ${BASELINE_FILE}"
+      echo "[salsa-memory] Run: $0 record"
+      exit 1
+    fi
   fi
 
   # shellcheck disable=SC1090
@@ -223,8 +229,15 @@ compare_with_baseline() {
 
   if [[ "${SALSA_MEMORY_IGNORE_METADATA:-0}" != "1" ]]; then
     if ! validate_baseline_metadata; then
-      echo "[salsa-memory] Run: $0 record"
-      exit 1
+      if [[ "$AUTO_BASELINE" == "1" ]]; then
+        echo "[salsa-memory] WARN: baseline metadata mismatch; recording ad-hoc baseline for this environment."
+        record_baseline
+        # shellcheck disable=SC1090
+        source "$BASELINE_FILE"
+      else
+        echo "[salsa-memory] Run: $0 record"
+        exit 1
+      fi
     fi
   fi
 

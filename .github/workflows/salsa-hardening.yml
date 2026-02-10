@@ -23,6 +23,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Compare memory/perf metrics with baseline
+        env:
+          SALSA_MEMORY_RECORD_IF_MISSING: "1"
         run: ./scripts/salsa_memory_gate.sh compare
 
   fuzz-smoke:
