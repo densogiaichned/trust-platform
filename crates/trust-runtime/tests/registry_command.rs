@@ -1,24 +1,50 @@
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use smol_str::SmolStr;
 use trust_runtime::bundle_builder::build_program_stbc;
 use trust_runtime::bundle_template::{build_io_config_auto, render_io_toml, render_runtime_toml};
 
+static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(1);
+
 fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before unix epoch")
-        .as_nanos();
-    std::env::temp_dir().join(format!(
-        "trust-runtime-{prefix}-{}-{nanos}",
-        std::process::id()
-    ))
+    for _ in 0..64 {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let seq = TEMP_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "trust-runtime-{prefix}-{}-{nanos}-{seq}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&dir) {
+            Ok(()) => return dir,
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => panic!("create temp dir {}: {err}", dir.display()),
+        }
+    }
+    panic!("failed to allocate unique temp dir for '{prefix}'")
+}
+
+fn make_runtime_toml_portable(runtime_toml: String) -> String {
+    #[cfg(windows)]
+    {
+        return runtime_toml.replacen(
+            "endpoint = \"unix:///tmp/trust-runtime.sock\"",
+            "endpoint = \"tcp://127.0.0.1:0\"\nauth_token = \"trust-ci-token\"",
+            1,
+        );
+    }
+    #[cfg(not(windows))]
+    runtime_toml
 }
 
 fn write_project_fixture(root: &std::path::Path, resource_name: &str) {
     std::fs::create_dir_all(root.join("sources")).expect("create source directory");
-    let runtime_toml = render_runtime_toml(&SmolStr::new(resource_name), 100);
+    let runtime_toml =
+        make_runtime_toml_portable(render_runtime_toml(&SmolStr::new(resource_name), 100));
     let io_template = build_io_config_auto("loopback").expect("build loopback io template");
     let io_toml = render_io_toml(&io_template);
     std::fs::write(root.join("runtime.toml"), runtime_toml).expect("write runtime.toml");

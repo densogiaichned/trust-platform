@@ -114,13 +114,16 @@ jobs:
           mkdir -p gate-artifacts
           LOG_PATH="gate-artifacts/test-${{ matrix.os }}.log"
           : > "${LOG_PATH}"
-          TEST_ARGS=()
-          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
-            TEST_ARGS=(-- --test-threads=1)
-          fi
+          run_full_suite() {
+            if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+              cargo test --all-targets -- --test-threads=1
+            else
+              cargo test --all-targets
+            fi
+          }
           for attempt in 1 2; do
             echo "=== full test suite attempt ${attempt}/2 (${{ matrix.os }}) ===" | tee -a "${LOG_PATH}"
-            if cargo test --all-targets "${TEST_ARGS[@]}" 2>&1 | tee -a "${LOG_PATH}"; then
+            if run_full_suite 2>&1 | tee -a "${LOG_PATH}"; then
               exit 0
             fi
             if [[ "${attempt}" -lt 2 ]]; then
