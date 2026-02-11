@@ -63,7 +63,7 @@ Target release: `v0.5.0`
 
 - Schneider EcoStruxure vendor detection is now distinct from generic CODESYS-family heuristics in PLCopen migration reports.
 - Release packaging metadata:
-  - VS Code extension package versions are now aligned to `0.4.1` to avoid duplicate publish artifacts from prior extension versions.
+  - VS Code extension package versions are now aligned to `0.5.0` to avoid duplicate publish artifacts from prior extension versions.
 - `%MW` memory marker force/write synchronization in runtime I/O panel flow.
 - Debug adapter force latch behavior and state-lock interaction.
 - Debug runner now respects configured task interval pacing.
