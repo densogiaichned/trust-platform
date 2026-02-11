@@ -1249,7 +1249,8 @@ impl TokenKind {
     pub fn can_start_expr(self) -> bool {
         matches!(
             self,
-            Self::Ident
+            Self::Hash
+                | Self::Ident
                 | Self::KwEn
                 | Self::KwEno
                 | Self::IntLiteral
@@ -1284,7 +1285,8 @@ impl TokenKind {
     pub fn can_start_statement(self) -> bool {
         matches!(
             self,
-            Self::Ident
+            Self::Hash
+                | Self::Ident
                 | Self::DirectAddress
                 | Self::KwThis
                 | Self::KwSuper
@@ -1439,6 +1441,29 @@ mod tests {
                 TokenKind::Slash,
                 TokenKind::Power,
                 TokenKind::Ampersand
+            ]
+        );
+    }
+
+    #[test]
+    fn test_hash_prefixed_identifier_tokens() {
+        let tokens = lex("#counter := #counter + 1;");
+        let kinds: Vec<_> = tokens
+            .iter()
+            .map(|(k, _)| *k)
+            .filter(|k| !k.is_trivia())
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                TokenKind::Hash,
+                TokenKind::Ident,
+                TokenKind::Assign,
+                TokenKind::Hash,
+                TokenKind::Ident,
+                TokenKind::Plus,
+                TokenKind::IntLiteral,
+                TokenKind::Semicolon
             ]
         );
     }

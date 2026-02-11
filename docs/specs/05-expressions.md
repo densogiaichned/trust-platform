@@ -222,6 +222,7 @@ TRUE                // Boolean literal
 T#1s500ms           // Duration literal
 MyVar               // Variable reference
 MyEnum#Value        // Enumerated value
+#LocalVar           // Siemens SCL local reference (extension, DEV-034)
 ```
 
 #### 5.2.1 Literal typing (implementer-specific)
@@ -234,6 +235,12 @@ MyEnum#Value        // Enumerated value
 - In assignments, returns, and call arguments, untyped numeric literals are coerced to the expected integer/real type when compatible.
 
 IEC 61131-3 Ed.3 §6.3.3 and Tables 5–9 define literal forms but do not mandate a single default integer type; this project follows the smallest‑fit policy (see IEC‑DEC‑014).
+
+#### 5.2.2 Siemens SCL local-reference prefix (extension)
+
+- `#identifier` is accepted as a `NameRef` in expression and statement contexts.
+- Intended for Siemens SCL compatibility (for example `#sum := #sum + 1;`).
+- Diagnostics: malformed prefix usage reports `expected identifier after '#'`.
 
 ### 5.3 Postfix Expressions
 

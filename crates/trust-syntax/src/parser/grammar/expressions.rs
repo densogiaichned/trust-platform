@@ -207,6 +207,19 @@ impl Parser<'_, '_> {
                 self.bump();
                 marker.complete(self, SyntaxKind::NameRef)
             }
+            TokenKind::Hash => {
+                let marker = self.start();
+                self.bump();
+                if matches!(
+                    self.current(),
+                    TokenKind::Ident | TokenKind::KwEn | TokenKind::KwEno
+                ) {
+                    self.bump();
+                } else {
+                    self.error("expected identifier after '#'");
+                }
+                marker.complete(self, SyntaxKind::NameRef)
+            }
             TokenKind::DirectAddress => {
                 let marker = self.start();
                 self.bump();

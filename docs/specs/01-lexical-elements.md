@@ -12,7 +12,7 @@ The character set is based on ISO/IEC 10646:2012 (Unicode).
 |-----|-------------|-------|
 | 1 | ISO/IEC 10646 | Standard requires Unicode support; trust-lsp currently supports ASCII only (DEV-013) |
 | 2a | Lower case characters | a-z |
-| 2b | Number sign | `#` (used in typed literals) |
+| 2b | Number sign | `#` (used in typed literals; Siemens SCL also uses `#identifier` local references, DEV-034) |
 | 2c | Dollar sign | `$` (used in string escapes) |
 
 **Case Sensitivity Rule**: When lower-case letters are supported, the case of letters shall NOT be significant in language elements, except:

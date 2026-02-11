@@ -122,3 +122,13 @@ fn test_this_super() {
 END_FUNCTION_BLOCK"#
     ));
 }
+
+#[test]
+fn test_siemens_hash_prefixed_locals() {
+    insta::assert_snapshot!(snapshot_parse(
+        r#"PROGRAM Test
+    #temp := #input + #fb.value;
+    #fb(Enable := #temp > 0);
+END_PROGRAM"#
+    ));
+}

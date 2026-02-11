@@ -148,6 +148,22 @@ fn print_import_report(report: &PlcopenImportReport) {
         "Migration report: {}",
         report.migration_report_path.display()
     );
+    if !report.applied_library_shims.is_empty() {
+        println!("Applied library shims:");
+        for shim in report.applied_library_shims.iter().take(10) {
+            println!(
+                " - {}: {} -> {} ({} occurrence(s)) [{}]",
+                shim.vendor,
+                shim.source_symbol,
+                shim.replacement_symbol,
+                shim.occurrences,
+                shim.notes
+            );
+        }
+        if report.applied_library_shims.len() > 10 {
+            println!(" - ... +{}", report.applied_library_shims.len() - 10);
+        }
+    }
     for path in report.written_sources.iter().take(10) {
         println!(" - {}", path.display());
     }

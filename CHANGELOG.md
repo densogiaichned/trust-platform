@@ -6,10 +6,19 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.5.0`
+Target release: `v0.7.0`
 
 ### Added
 
+- Vendor Library Compatibility Baseline (Deliverable 4):
+  - `trust-runtime plcopen import` now applies deterministic vendor-library shim mappings for selected Siemens, Rockwell, Schneider/CODESYS, and Mitsubishi aliases.
+  - Import/migration JSON contracts now include `applied_library_shims` with vendor/source/replacement/occurrence metadata.
+  - Vendor-library compatibility matrix and shim catalog published in `docs/guides/VENDOR_LIBRARY_COMPATIBILITY.md`.
+- Siemens SCL Compatibility v1 (Deliverable 3):
+  - Siemens-style `#`-prefixed local references now parse in expression and statement contexts (including `FOR` loop control variables).
+  - Siemens SCL compatibility guide published: `docs/guides/SIEMENS_SCL_COMPATIBILITY.md`.
+  - Siemens SCL example project added: `examples/siemens_scl_v1/`.
+  - Regression coverage added across parser, LSP formatting/diagnostics, and runtime example compile tests.
 - PLCopen Interop Hardening (Deliverable 2):
   - expanded migration fixture coverage for major ecosystems (`codesys`, `beckhoff-twincat`, `siemens-tia`, `rockwell-studio5000`, `schneider-ecostruxure`)
   - structured unsupported-node diagnostics in migration reports with code/severity/node/action metadata
@@ -48,6 +57,8 @@ Target release: `v0.5.0`
 
 - `trust-runtime plcopen export` and `trust-runtime plcopen import` now support `--json` for machine-readable report output.
 - `trust-runtime plcopen profile` now publishes a compatibility matrix plus round-trip limits/known-gaps contract fields.
+- `trust-runtime plcopen import` compatibility scoring now accounts for shimmed vendor-library aliases as partial-coverage items.
+- PLCopen ecosystem detection now recognizes Mitsubishi GX Works markers (`mitsubishi-gxworks3`) for migration reporting/shim selection.
 - Migrated `trust-hir` semantic path to Salsa-only backend and upgraded Salsa to `0.26`.
 - Enabled VS Code extension integration tests in CI under virtual display (`xvfb`).
 - Expanded cancellation checks in workspace-scale LSP operations.
@@ -61,9 +72,10 @@ Target release: `v0.5.0`
 
 ### Fixed
 
+- Parser diagnostics now report a targeted error (`expected identifier after '#'`) for malformed Siemens SCL `#` local-reference syntax instead of generic expression errors.
 - Schneider EcoStruxure vendor detection is now distinct from generic CODESYS-family heuristics in PLCopen migration reports.
 - Release packaging metadata:
-  - VS Code extension package versions are now aligned to `0.5.0` to avoid duplicate publish artifacts from prior extension versions.
+  - VS Code extension package versions are now aligned to the workspace release version to avoid duplicate publish artifacts from prior extension versions.
 - `%MW` memory marker force/write synchronization in runtime I/O panel flow.
 - Debug adapter force latch behavior and state-lock interaction.
 - Debug runner now respects configured task interval pacing.

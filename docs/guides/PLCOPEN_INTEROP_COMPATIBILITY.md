@@ -20,9 +20,10 @@ This document defines the current PLCopen XML interoperability contract for
 | Source map metadata (`trust.sourceMap`) | supported | Embedded `addData` payload + sidecar `*.source-map.json`. |
 | Vendor extension preservation (`addData`) | partial | Preserved/re-injectable, but not semantically interpreted. |
 | Vendor ecosystem migration heuristics | partial | Advisory signal only; not semantic equivalence. |
+| Vendor library shim normalization | partial | Selected aliases are mapped to IEC FB names during import; each mapping is reported. |
 | Graphical bodies (FBD/LD/SFC) | unsupported | Strict subset remains ST-only. |
 | Resource/configuration execution model import | unsupported | `<instances>/<configurations>/<resources>` not mapped to runtime scheduling. |
-| Vendor library semantics/AOI pragmas | unsupported | Reported in migration diagnostics and known gaps. |
+| Vendor AOI/library internal semantics | unsupported | Advanced behavior remains manual migration work beyond symbol-level shims. |
 
 ## Migration Report Contract
 
@@ -47,6 +48,12 @@ This document defines the current PLCopen XML interoperability contract for
   - `message`
   - optional `pou`
   - `action`
+- Applied shim summary (`applied_library_shims`) with:
+  - `vendor`
+  - `source_symbol`
+  - `replacement_symbol`
+  - `occurrences`
+  - `notes`
 - Per-POU migration entries (`entries`) with `status` and `reason`.
 
 ## Supported Ecosystem Detection (Advisory)
@@ -58,6 +65,7 @@ Detected values currently include:
 - `siemens-tia`
 - `rockwell-studio5000`
 - `schneider-ecostruxure`
+- `mitsubishi-gxworks3`
 - fallback: `generic-plcopen`
 
 ## Round-Trip Limits
@@ -80,5 +88,6 @@ Not guaranteed:
 
 - No semantic import for SFC/LD/FBD bodies.
 - No import of PLCopen runtime resources/configurations into task/runtime model.
-- No semantic translation for vendor-specific libraries and pragmas.
+- Vendor library shim coverage is intentionally limited to the baseline alias catalog.
+- No semantic translation for vendor-specific AOI/FB internals and pragmas.
 - Vendor extension nodes are preserved as opaque metadata, not executed.

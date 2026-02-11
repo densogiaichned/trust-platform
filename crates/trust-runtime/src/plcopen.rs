@@ -2,11 +2,12 @@
 
 #![allow(missing_docs)]
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use trust_syntax::lexer::{lex, TokenKind};
 use trust_syntax::parser;
 use trust_syntax::syntax::{SyntaxKind, SyntaxNode};
 
@@ -17,6 +18,57 @@ const VENDOR_EXT_DATA_NAME: &str = "trust.vendorExtensions";
 const VENDOR_EXTENSION_HOOK_FILE: &str = "plcopen.vendor-extensions.xml";
 const IMPORTED_VENDOR_EXTENSION_FILE: &str = "plcopen.vendor-extensions.imported.xml";
 const MIGRATION_REPORT_FILE: &str = "interop/plcopen-migration-report.json";
+
+const SIEMENS_LIBRARY_SHIMS: &[VendorLibraryShim] = &[
+    VendorLibraryShim {
+        source_symbol: "SFB3",
+        replacement_symbol: "TP",
+        notes: "Siemens pulse timer alias mapped to IEC TP.",
+    },
+    VendorLibraryShim {
+        source_symbol: "SFB4",
+        replacement_symbol: "TON",
+        notes: "Siemens on-delay timer alias mapped to IEC TON.",
+    },
+    VendorLibraryShim {
+        source_symbol: "SFB5",
+        replacement_symbol: "TOF",
+        notes: "Siemens off-delay timer alias mapped to IEC TOF.",
+    },
+];
+
+const ROCKWELL_LIBRARY_SHIMS: &[VendorLibraryShim] = &[VendorLibraryShim {
+    source_symbol: "TONR",
+    replacement_symbol: "TON",
+    notes:
+        "Rockwell retentive timer alias mapped to IEC TON (review retentive semantics manually).",
+}];
+
+const SCHNEIDER_LIBRARY_SHIMS: &[VendorLibraryShim] = &[
+    VendorLibraryShim {
+        source_symbol: "R_EDGE",
+        replacement_symbol: "R_TRIG",
+        notes: "Schneider/CODESYS edge alias mapped to IEC R_TRIG.",
+    },
+    VendorLibraryShim {
+        source_symbol: "F_EDGE",
+        replacement_symbol: "F_TRIG",
+        notes: "Schneider/CODESYS edge alias mapped to IEC F_TRIG.",
+    },
+];
+
+const MITSUBISHI_LIBRARY_SHIMS: &[VendorLibraryShim] = &[
+    VendorLibraryShim {
+        source_symbol: "DIFU",
+        replacement_symbol: "R_TRIG",
+        notes: "Mitsubishi differential-up alias mapped to IEC R_TRIG.",
+    },
+    VendorLibraryShim {
+        source_symbol: "DIFD",
+        replacement_symbol: "F_TRIG",
+        notes: "Mitsubishi differential-down alias mapped to IEC F_TRIG.",
+    },
+];
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlcopenProfile {
@@ -56,6 +108,7 @@ pub struct PlcopenImportReport {
     pub detected_ecosystem: String,
     pub compatibility_coverage: PlcopenCompatibilityCoverage,
     pub unsupported_diagnostics: Vec<PlcopenUnsupportedDiagnostic>,
+    pub applied_library_shims: Vec<PlcopenLibraryShimApplication>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,6 +127,7 @@ pub struct PlcopenMigrationReport {
     pub compatibility_coverage: PlcopenCompatibilityCoverage,
     pub unsupported_nodes: Vec<String>,
     pub unsupported_diagnostics: Vec<PlcopenUnsupportedDiagnostic>,
+    pub applied_library_shims: Vec<PlcopenLibraryShimApplication>,
     pub warnings: Vec<String>,
     pub entries: Vec<PlcopenMigrationEntry>,
 }
@@ -112,6 +166,22 @@ pub struct PlcopenUnsupportedDiagnostic {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pou: Option<String>,
     pub action: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlcopenLibraryShimApplication {
+    pub vendor: String,
+    pub source_symbol: String,
+    pub replacement_symbol: String,
+    pub occurrences: usize,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct VendorLibraryShim {
+    source_symbol: &'static str,
+    replacement_symbol: &'static str,
+    notes: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -214,14 +284,19 @@ pub fn supported_profile() -> PlcopenProfile {
                 notes: "Detected ecosystems are advisory diagnostics for migration workflows, not semantic guarantees.",
             },
             PlcopenCompatibilityMatrixEntry {
+                capability: "Vendor library compatibility shims (selected timer/edge aliases)",
+                status: "partial",
+                notes: "Import can normalize selected Siemens/Rockwell/Schneider/Mitsubishi aliases to IEC FB names and reports each shim application.",
+            },
+            PlcopenCompatibilityMatrixEntry {
                 capability: "Graphical bodies (FBD/LD/SFC) and project-level runtime resources",
                 status: "unsupported",
                 notes: "Strict subset is ST-only and does not import graphical networks/configuration/resource execution models.",
             },
             PlcopenCompatibilityMatrixEntry {
-                capability: "Vendor libraries, type systems, and platform-specific pragmas",
+                capability: "Vendor AOIs, advanced library semantics, and platform-specific pragmas",
                 status: "unsupported",
-                notes: "Unsupported content is reported in migration diagnostics and known-gaps docs.",
+                notes: "Shim catalog is intentionally narrow; unsupported content is reported in migration diagnostics and known-gaps docs.",
             },
         ],
         source_mapping: "Export writes deterministic source-map sidecar JSON and embeds trust.sourceMap in addData.",
@@ -231,12 +306,14 @@ pub fn supported_profile() -> PlcopenProfile {
             "Round-trip guarantees preserve ST POU signatures (name/type/body intent) for strict-subset inputs.",
             "Round-trip does not preserve vendor formatting/layout, graphical networks, or runtime deployment metadata.",
             "Round-trip can rename output source files to sanitized unique names inside sources/.",
+            "Round-trip may normalize selected vendor library symbols to IEC equivalents when shim rules apply during import.",
             "Round-trip preserves unknown vendor addData as opaque fragments, not executable semantics.",
         ],
         known_gaps: vec![
             "No import/export for SFC/LD/FBD bodies.",
             "No import of PLCopen instances/configurations/resources into runtime scheduling model.",
-            "No semantic translation for vendor-specific standard libraries and AOI/FB variants.",
+            "Vendor library shim coverage is limited to the published baseline alias catalog.",
+            "No semantic translation for vendor-specific AOI/FB internal behavior beyond simple symbol remapping.",
             "No guaranteed equivalence for vendor pragmas, safety metadata, or online deployment tags.",
         ],
     }
@@ -413,6 +490,8 @@ pub fn import_xml_to_project(
     let mut written_sources = Vec::new();
     let mut seen_files = HashSet::new();
     let mut migration_entries = Vec::new();
+    let mut applied_shim_counts: BTreeMap<(String, String, String, String), usize> =
+        BTreeMap::new();
     let mut discovered_pous = 0usize;
     let mut loss_warnings = 0usize;
 
@@ -574,7 +653,37 @@ pub fn import_xml_to_project(
         }
 
         let normalized_body = normalize_body_text(body);
-        std::fs::write(&candidate, normalized_body)
+        let (shimmed_body, shim_applications) =
+            apply_vendor_library_shims(&normalized_body, &detected_ecosystem);
+        for application in shim_applications {
+            warnings.push(format!(
+                "applied vendor library shim in pou '{}': {} -> {} ({} occurrence(s))",
+                name,
+                application.source_symbol,
+                application.replacement_symbol,
+                application.occurrences
+            ));
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO301",
+                "info",
+                format!("vendor-shim:{}", application.source_symbol),
+                format!(
+                    "Vendor library shim mapped '{}' to '{}'",
+                    application.source_symbol, application.replacement_symbol
+                ),
+                Some(name.clone()),
+                application.notes.clone(),
+            ));
+            let key = (
+                application.vendor,
+                application.source_symbol,
+                application.replacement_symbol,
+                application.notes,
+            );
+            *applied_shim_counts.entry(key).or_insert(0) += application.occurrences;
+        }
+
+        std::fs::write(&candidate, shimmed_body)
             .with_context(|| format!("failed to write '{}'", candidate.display()))?;
         written_sources.push(candidate);
 
@@ -624,8 +733,30 @@ pub fn import_xml_to_project(
         unsupported_nodes.len(),
         loss_warnings,
     );
-    let compatibility_coverage =
-        calculate_compatibility_coverage(imported_pous, skipped_pous, unsupported_nodes.len());
+    let applied_library_shims = applied_shim_counts
+        .into_iter()
+        .map(
+            |((vendor, source_symbol, replacement_symbol, notes), occurrences)| {
+                PlcopenLibraryShimApplication {
+                    vendor,
+                    source_symbol,
+                    replacement_symbol,
+                    occurrences,
+                    notes,
+                }
+            },
+        )
+        .collect::<Vec<_>>();
+    let shimmed_occurrences = applied_library_shims
+        .iter()
+        .map(|entry| entry.occurrences)
+        .sum::<usize>();
+    let compatibility_coverage = calculate_compatibility_coverage(
+        imported_pous,
+        skipped_pous,
+        unsupported_nodes.len(),
+        shimmed_occurrences,
+    );
 
     let preserved_vendor_extensions =
         preserve_vendor_extensions(root, &xml_text, project_root, &mut warnings)?;
@@ -648,6 +779,7 @@ pub fn import_xml_to_project(
         compatibility_coverage: compatibility_coverage.clone(),
         unsupported_nodes: unsupported_nodes.clone(),
         unsupported_diagnostics: unsupported_diagnostics.clone(),
+        applied_library_shims: applied_library_shims.clone(),
         warnings: warnings.clone(),
         entries: migration_entries,
     };
@@ -675,6 +807,7 @@ pub fn import_xml_to_project(
         detected_ecosystem,
         compatibility_coverage,
         unsupported_diagnostics,
+        applied_library_shims,
     })
 }
 
@@ -910,6 +1043,144 @@ fn extract_text_content(node: roxmltree::Node<'_, '_>) -> Option<String> {
     }
 }
 
+fn vendor_library_shims_for_ecosystem(ecosystem: &str) -> &'static [VendorLibraryShim] {
+    match ecosystem {
+        "siemens-tia" => SIEMENS_LIBRARY_SHIMS,
+        "rockwell-studio5000" => ROCKWELL_LIBRARY_SHIMS,
+        "schneider-ecostruxure" | "codesys" => SCHNEIDER_LIBRARY_SHIMS,
+        "mitsubishi-gxworks3" => MITSUBISHI_LIBRARY_SHIMS,
+        _ => &[],
+    }
+}
+
+fn apply_vendor_library_shims(
+    body: &str,
+    ecosystem: &str,
+) -> (String, Vec<PlcopenLibraryShimApplication>) {
+    let shims = vendor_library_shims_for_ecosystem(ecosystem);
+    if shims.is_empty() {
+        return (body.to_string(), Vec::new());
+    }
+
+    let tokens = lex(body);
+    if tokens.is_empty() {
+        return (body.to_string(), Vec::new());
+    }
+
+    let mut output = String::with_capacity(body.len());
+    let mut cursor = 0usize;
+    let mut counts: BTreeMap<(String, String, String, String), usize> = BTreeMap::new();
+
+    for (index, token) in tokens.iter().enumerate() {
+        let start = usize::from(token.range.start());
+        let end = usize::from(token.range.end());
+        if start > cursor {
+            output.push_str(&body[cursor..start]);
+        }
+
+        let token_text = &body[start..end];
+        if token.kind == TokenKind::Ident {
+            if let Some(shim) = match_library_shim(shims, token_text, &tokens, index) {
+                output.push_str(shim.replacement_symbol);
+                let key = (
+                    ecosystem.to_string(),
+                    shim.source_symbol.to_string(),
+                    shim.replacement_symbol.to_string(),
+                    shim.notes.to_string(),
+                );
+                *counts.entry(key).or_insert(0) += 1;
+            } else {
+                output.push_str(token_text);
+            }
+        } else {
+            output.push_str(token_text);
+        }
+        cursor = end;
+    }
+
+    if cursor < body.len() {
+        output.push_str(&body[cursor..]);
+    }
+
+    let applications = counts
+        .into_iter()
+        .map(
+            |((vendor, source_symbol, replacement_symbol, notes), occurrences)| {
+                PlcopenLibraryShimApplication {
+                    vendor,
+                    source_symbol,
+                    replacement_symbol,
+                    occurrences,
+                    notes,
+                }
+            },
+        )
+        .collect();
+    (output, applications)
+}
+
+fn match_library_shim<'a>(
+    shims: &'a [VendorLibraryShim],
+    token_text: &str,
+    tokens: &[trust_syntax::lexer::Token],
+    index: usize,
+) -> Option<&'a VendorLibraryShim> {
+    let upper = token_text.to_ascii_uppercase();
+    let shim = shims
+        .iter()
+        .find(|candidate| candidate.source_symbol == upper)?;
+
+    let previous = previous_non_trivia_token_kind(tokens, index);
+    let next = next_non_trivia_token_kind(tokens, index);
+    if previous == Some(TokenKind::Dot) {
+        return None;
+    }
+
+    let type_position = matches!(
+        previous,
+        Some(TokenKind::Colon)
+            | Some(TokenKind::KwOf)
+            | Some(TokenKind::KwExtends)
+            | Some(TokenKind::KwRefTo)
+    );
+    let call_position = next == Some(TokenKind::LParen);
+    if type_position || call_position {
+        Some(shim)
+    } else {
+        None
+    }
+}
+
+fn previous_non_trivia_token_kind(
+    tokens: &[trust_syntax::lexer::Token],
+    index: usize,
+) -> Option<TokenKind> {
+    let mut current = index;
+    while current > 0 {
+        current -= 1;
+        let kind = tokens[current].kind;
+        if !kind.is_trivia() {
+            return Some(kind);
+        }
+    }
+    None
+}
+
+fn next_non_trivia_token_kind(
+    tokens: &[trust_syntax::lexer::Token],
+    index: usize,
+) -> Option<TokenKind> {
+    let mut current = index + 1;
+    while current < tokens.len() {
+        let kind = tokens[current].kind;
+        if !kind.is_trivia() {
+            return Some(kind);
+        }
+        current += 1;
+    }
+    None
+}
+
 fn calculate_source_coverage(imported: usize, discovered: usize) -> f64 {
     if discovered == 0 {
         return 0.0;
@@ -940,9 +1211,10 @@ fn calculate_compatibility_coverage(
     imported_pous: usize,
     skipped_pous: usize,
     unsupported_nodes: usize,
+    shimmed_occurrences: usize,
 ) -> PlcopenCompatibilityCoverage {
     let supported_items = imported_pous;
-    let partial_items = unsupported_nodes;
+    let partial_items = unsupported_nodes + shimmed_occurrences;
     let unsupported_items = skipped_pous;
     let total = supported_items + partial_items + unsupported_items;
     let support_percent = if total == 0 {
@@ -1030,6 +1302,12 @@ fn detect_vendor_ecosystem(root: roxmltree::Node<'_, '_>, xml_text: &str) -> Str
         || normalized.contains("allen-bradley")
     {
         "rockwell-studio5000".to_string()
+    } else if normalized.contains("mitsubishi")
+        || normalized.contains("gx works")
+        || normalized.contains("gxworks")
+        || normalized.contains("melsoft")
+    {
+        "mitsubishi-gxworks3".to_string()
     } else {
         "generic-plcopen".to_string()
     }
@@ -1320,6 +1598,82 @@ END_PROGRAM
     }
 
     #[test]
+    fn import_applies_siemens_library_shims_and_reports_them() {
+        let project = temp_dir("plcopen-import-siemens-shims");
+        let xml_path = project.join("siemens.xml");
+        write(
+            &xml_path,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://www.plcopen.org/xml/tc6_0200">
+  <fileHeader companyName="Siemens AG" productName="TIA Portal V18" />
+  <types>
+    <pous>
+      <pou name="MainOb1" pouType="PRG">
+        <body>
+          <ST><![CDATA[
+PROGRAM MainOb1
+VAR
+    PulseTimer : SFB3;
+    DelayTimer : SFB4;
+END_VAR
+PulseTimer(IN := TRUE, PT := T#200ms);
+DelayTimer(IN := PulseTimer.Q, PT := T#2s);
+END_PROGRAM
+]]></ST>
+        </body>
+      </pou>
+    </pous>
+  </types>
+</project>
+"#,
+        );
+
+        let report = import_xml_to_project(&xml_path, &project).expect("import XML");
+        assert_eq!(report.detected_ecosystem, "siemens-tia");
+        assert!(!report.applied_library_shims.is_empty());
+        assert!(report
+            .applied_library_shims
+            .iter()
+            .any(|entry| entry.source_symbol == "SFB3" && entry.replacement_symbol == "TP"));
+        assert!(report
+            .applied_library_shims
+            .iter()
+            .any(|entry| entry.source_symbol == "SFB4" && entry.replacement_symbol == "TON"));
+        assert!(report
+            .unsupported_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "PLCO301"));
+
+        let source = std::fs::read_to_string(&report.written_sources[0]).expect("read source");
+        assert!(source.contains("PulseTimer : TP;"));
+        assert!(source.contains("DelayTimer : TON;"));
+        assert!(!source.contains("SFB3"));
+        assert!(!source.contains("SFB4"));
+
+        let _ = std::fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn library_shim_rewrites_type_and_call_sites_only() {
+        let body = r#"
+PROGRAM Main
+VAR
+    SFB4 : BOOL := FALSE;
+    DelayTimer : SFB4;
+END_VAR
+SFB4 := TRUE;
+DelayTimer(IN := SFB4, PT := T#1s);
+END_PROGRAM
+"#;
+
+        let (shimmed, applied) = apply_vendor_library_shims(body, "siemens-tia");
+        assert_eq!(applied.len(), 1);
+        assert!(shimmed.contains("SFB4 : BOOL := FALSE;"));
+        assert!(shimmed.contains("DelayTimer : TON;"));
+        assert!(shimmed.contains("SFB4 := TRUE;"));
+    }
+
+    #[test]
     fn import_rejects_malformed_xml() {
         let project = temp_dir("plcopen-malformed");
         let xml_path = project.join("broken.xml");
@@ -1368,6 +1722,9 @@ END_PROGRAM
             .compatibility_matrix
             .iter()
             .any(|entry| entry.status == "supported"));
+        assert!(profile.compatibility_matrix.iter().any(|entry| {
+            entry.status == "partial" && entry.capability.contains("compatibility shims")
+        }));
         assert!(!profile.round_trip_limits.is_empty());
         assert!(!profile.known_gaps.is_empty());
     }

@@ -71,6 +71,15 @@ END_PROGRAM"#
 }
 
 #[test]
+fn test_hash_without_identifier() {
+    insta::assert_snapshot!(snapshot_parse(
+        r#"PROGRAM Test
+    # := 1;
+END_PROGRAM"#
+    ));
+}
+
+#[test]
 fn test_deep_unary_expression_is_bounded() {
     let source = format!("PROGRAM Test\n    x := {}1;\nEND_PROGRAM", "+".repeat(2048));
 

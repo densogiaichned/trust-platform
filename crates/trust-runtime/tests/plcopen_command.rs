@@ -290,6 +290,74 @@ END_PROGRAM
 }
 
 #[test]
+fn plcopen_import_json_reports_applied_vendor_library_shims() {
+    let project = unique_temp_dir("plcopen-cli-shim-import");
+    std::fs::create_dir_all(&project).expect("create temp project");
+    let input_xml = project.join("siemens-shim.xml");
+    std::fs::write(
+        &input_xml,
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://www.plcopen.org/xml/tc6_0200">
+  <fileHeader companyName="Siemens AG" productName="TIA Portal V18" />
+  <types>
+    <pous>
+      <pou name="MainOb1" pouType="PRG">
+        <body>
+          <ST><![CDATA[
+PROGRAM MainOb1
+VAR
+  DelayTimer : SFB4;
+END_VAR
+DelayTimer(IN := TRUE, PT := T#1s);
+END_PROGRAM
+]]></ST>
+        </body>
+      </pou>
+    </pous>
+  </types>
+</project>
+"#,
+    )
+    .expect("write shim fixture");
+
+    let import_project = unique_temp_dir("plcopen-cli-shim-import-out");
+    let import = Command::new(env!("CARGO_BIN_EXE_trust-runtime"))
+        .args([
+            "plcopen",
+            "import",
+            "--input",
+            input_xml.to_str().expect("input xml utf-8"),
+            "--project",
+            import_project.to_str().expect("import project utf-8"),
+            "--json",
+        ])
+        .output()
+        .expect("run plcopen import json");
+    assert!(
+        import.status.success(),
+        "expected import json success, stderr was:\n{}",
+        String::from_utf8_lossy(&import.stderr)
+    );
+
+    let import_json: serde_json::Value =
+        serde_json::from_slice(&import.stdout).expect("parse import JSON report");
+    assert_eq!(import_json["detected_ecosystem"], "siemens-tia");
+    assert!(import_json["applied_library_shims"]
+        .as_array()
+        .expect("applied library shims array")
+        .iter()
+        .any(|entry| entry["source_symbol"] == "SFB4" && entry["replacement_symbol"] == "TON"));
+    assert!(import_json["unsupported_diagnostics"]
+        .as_array()
+        .expect("unsupported diagnostics array")
+        .iter()
+        .any(|entry| entry["code"] == "PLCO301"));
+
+    let _ = std::fs::remove_dir_all(project);
+    let _ = std::fs::remove_dir_all(import_project);
+}
+
+#[test]
 fn plcopen_import_fails_for_missing_input() {
     let project = unique_temp_dir("plcopen-cli-missing-input");
     let missing = project.join("does-not-exist.xml");

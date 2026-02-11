@@ -148,3 +148,15 @@ fn test_output_connection() {
 END_PROGRAM"#
     ));
 }
+
+#[test]
+fn test_siemens_hash_prefixed_statement_forms() {
+    insta::assert_snapshot!(snapshot_parse(
+        r#"PROGRAM Test
+    #sum := 0;
+    FOR #i := 0 TO 3 DO
+        #sum := #sum + #i;
+    END_FOR;
+END_PROGRAM"#
+    ));
+}

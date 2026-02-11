@@ -3826,6 +3826,7 @@ Runtime exposes a strict PLCopen XML profile through `trust-runtime plcopen`:
   - semantic-loss score (weighted from skipped POUs + unsupported nodes/warnings)
   - compatibility coverage summary (`supported_items`, `partial_items`, `unsupported_items`, `support_percent`, `verdict`)
   - structured unsupported diagnostics (`code`, `severity`, `node`, `message`, optional `pou`, `action`)
+  - applied vendor-library shim summary (`vendor`, `source_symbol`, `replacement_symbol`, `occurrences`, `notes`)
   - per-POU entry status (`imported` or `skipped`) and skip reasons
 
 Current strict subset contract:
@@ -3841,7 +3842,9 @@ Current strict subset contract:
   - `FUNCTION_BLOCK`/`FB` -> `functionBlock`
 - Vendor ecosystem detection heuristics for migration reports:
   - `codesys`, `beckhoff-twincat`, `siemens-tia`, `rockwell-studio5000`,
-    `schneider-ecostruxure`, fallback `generic-plcopen`
+    `schneider-ecostruxure`, `mitsubishi-gxworks3`, fallback `generic-plcopen`
+- Vendor-library baseline shim catalog includes selected alias normalization
+  (e.g., Siemens `SFB3/4/5` -> `TP/TON/TOF`) with per-import diagnostics.
 
 Round-trip limits and known gaps are documented in
 `docs/guides/PLCOPEN_INTEROP_COMPATIBILITY.md`.

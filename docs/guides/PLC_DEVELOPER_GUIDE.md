@@ -68,7 +68,8 @@ Import writes migrated sources to `sources/` and a migration report to:
 
 The report includes detected vendor ecosystem, discovered/imported/skipped POU
 counts, source coverage, semantic-loss score, compatibility coverage summary,
-structured unsupported-node diagnostics, and per-POU skip reasons.
+structured unsupported-node diagnostics, applied vendor-library shims, and
+per-POU skip reasons.
 
 For compatibility matrix, round-trip limits, and known gaps, see:
 

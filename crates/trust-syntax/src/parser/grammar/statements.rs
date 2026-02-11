@@ -224,7 +224,14 @@ impl Parser<'_, '_> {
         self.start_node(SyntaxKind::ForStmt);
         self.bump(); // FOR
 
-        if self.at(TokenKind::Ident) {
+        if self.at(TokenKind::Hash) {
+            self.bump();
+            if self.at(TokenKind::Ident) {
+                self.parse_name();
+            } else {
+                self.error("expected identifier after '#'");
+            }
+        } else if self.at(TokenKind::Ident) {
             self.parse_name();
         }
 

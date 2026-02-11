@@ -25,6 +25,17 @@ PLCopen compatibility matrix, migration diagnostics contract, round-trip limits,
 and known gaps are documented in:
 `docs/guides/PLCOPEN_INTEROP_COMPATIBILITY.md`.
 
+## Vendor Library Compatibility
+
+Vendor library baseline shim coverage and compatibility matrix are documented in:
+`docs/guides/VENDOR_LIBRARY_COMPATIBILITY.md`.
+
+## Siemens SCL Compatibility
+
+Siemens SCL v1 supported subset, known deviations, and regression coverage are
+documented in:
+`docs/guides/SIEMENS_SCL_COMPATIBILITY.md`.
+
 ## Diagram Maintenance
 
 Use the helper scripts to keep PlantUML diagrams in sync:
