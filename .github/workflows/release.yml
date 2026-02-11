@@ -182,7 +182,52 @@ jobs:
 
       - name: Publish to VS Code Marketplace
         if: ${{ env.VSCE_PAT != '' }}
-        run: vsce publish --packagePath vsix-artifacts/*.vsix
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          vsix_files=(vsix-artifacts/*.vsix)
+          if [ "${#vsix_files[@]}" -eq 0 ]; then
+            echo "No VSIX artifacts found in vsix-artifacts/"
+            exit 1
+          fi
+
+          max_attempts=4
+          for vsix in "${vsix_files[@]}"; do
+            attempt=1
+            while [ "$attempt" -le "$max_attempts" ]; do
+              echo "Publishing $vsix (attempt $attempt/$max_attempts)"
+              output_file="$(mktemp)"
+              if vsce publish --packagePath "$vsix" >"$output_file" 2>&1; then
+                cat "$output_file"
+                rm -f "$output_file"
+                break
+              fi
+
+              exit_code=$?
+              output="$(cat "$output_file")"
+              cat "$output_file"
+              rm -f "$output_file"
+
+              if echo "$output" | grep -Eiq "already exists|already been published|already published"; then
+                echo "VSIX already published for $vsix; treating as success."
+                break
+              fi
+
+              if echo "$output" | grep -Eiq "Request timeout|ETIMEDOUT|ECONNRESET|socket hang up|ENOTFOUND|EAI_AGAIN|502|503|504"; then
+                if [ "$attempt" -lt "$max_attempts" ]; then
+                  sleep_seconds=$((attempt * 10))
+                  echo "Transient publish failure for $vsix; retrying in ${sleep_seconds}s..."
+                  sleep "$sleep_seconds"
+                  attempt=$((attempt + 1))
+                  continue
+                fi
+              fi
+
+              echo "Failed to publish $vsix after $attempt attempt(s)."
+              exit "$exit_code"
+            done
+          done
 
       - name: Skip Marketplace publish (missing VSCE_PAT)
         if: ${{ env.VSCE_PAT == '' }}
