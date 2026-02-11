@@ -17,6 +17,7 @@ This document defines the current PLCopen XML interoperability contract for
 | Capability | Status | Notes |
 |---|---|---|
 | ST POU import/export (`PROGRAM`, `FUNCTION`, `FUNCTION_BLOCK`) | supported | Includes common aliases (`PRG`, `FC`, `FUN`, `FB`). |
+| ST type graph import (`types/dataTypes` subset) | partial | Supported `baseType` subset (`elementary`, `derived`, `array`, `struct`, `enum`, `subrange`) is imported into generated `TYPE` declarations under `sources/`. |
 | Source map metadata (`trust.sourceMap`) | supported | Embedded `addData` payload + sidecar `*.source-map.json`. |
 | Vendor extension preservation (`addData`) | partial | Preserved/re-injectable, but not semantically interpreted. |
 | Vendor ecosystem migration heuristics | partial | Advisory signal only; not semantic equivalence. |
@@ -83,11 +84,13 @@ Not guaranteed:
 - Preservation of graphical network semantics.
 - Import of runtime deployment/safety metadata.
 - Exact source file names (imports use sanitized unique names under `sources/`).
+- `dataTypes` round-trip parity (import currently generates ST `TYPE` source; export-side `dataTypes` emission is pending).
 
 ## Known Gaps
 
 - No semantic import for SFC/LD/FBD bodies.
 - No import of PLCopen runtime resources/configurations into task/runtime model.
+- `dataTypes` export is not yet implemented; import currently materializes supported `dataTypes` as ST `TYPE` declarations in `sources/`.
 - Vendor library shim coverage is intentionally limited to the baseline alias catalog.
 - No semantic translation for vendor-specific AOI/FB internals and pragmas.
 - Vendor extension nodes are preserved as opaque metadata, not executed.

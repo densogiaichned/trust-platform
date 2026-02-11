@@ -182,7 +182,7 @@ fn migration_import_schneider_fixture_detects_vendor_precedence() {
     assert!(report
         .unsupported_diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.code == "PLCO102"));
+        .any(|diagnostic| diagnostic.code == "PLCO402"));
     assert!(report
         .unsupported_diagnostics
         .iter()

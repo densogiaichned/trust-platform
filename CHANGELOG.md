@@ -55,6 +55,7 @@ Target release: `v0.7.2`
 
 ### Changed
 
+- Deliverable 5 kickoff: `trust-runtime plcopen import` now imports supported PLCopen `types/dataTypes` baseType forms (`elementary`, `derived`, `array`, `struct`, `enum`, `subrange`) into generated ST `TYPE` declarations under `sources/`, while reporting unsupported definitions with structured diagnostics.
 - `trust-runtime plcopen export` and `trust-runtime plcopen import` now support `--json` for machine-readable report output.
 - `trust-runtime plcopen profile` now publishes a compatibility matrix plus round-trip limits/known-gaps contract fields.
 - `trust-runtime plcopen import` compatibility scoring now accounts for shimmed vendor-library aliases as partial-coverage items.

@@ -1,4 +1,4 @@
-//! PLCopen XML interchange (strict subset for ST projects).
+//! PLCopen XML interchange (ST-focused subset profile).
 
 #![allow(missing_docs)]
 
@@ -18,6 +18,7 @@ const VENDOR_EXT_DATA_NAME: &str = "trust.vendorExtensions";
 const VENDOR_EXTENSION_HOOK_FILE: &str = "plcopen.vendor-extensions.xml";
 const IMPORTED_VENDOR_EXTENSION_FILE: &str = "plcopen.vendor-extensions.imported.xml";
 const MIGRATION_REPORT_FILE: &str = "interop/plcopen-migration-report.json";
+const GENERATED_DATA_TYPES_SOURCE_PREFIX: &str = "plcopen_data_types";
 
 const SIEMENS_LIBRARY_SHIMS: &[VendorLibraryShim] = &[
     VendorLibraryShim {
@@ -253,14 +254,15 @@ pub fn supported_profile() -> PlcopenProfile {
         strict_subset: vec![
             "project/fileHeader/contentHeader",
             "types/pous/pou[pouType=program|function|functionBlock]",
+            "types/dataTypes/dataType[baseType subset: elementary|derived|array|struct|enum|subrange]",
             "pou/body/ST plain-text bodies",
             "addData/data[name=trust.sourceMap|trust.vendorExtensions]",
         ],
         unsupported_nodes: vec![
-            "dataTypes",
             "instances/configurations/resources",
             "graphical bodies (FBD/LD/SFC)",
             "vendor-specific nodes (preserved via hooks, not interpreted)",
+            "dataTypes outside supported baseType subset",
         ],
         compatibility_matrix: vec![
             PlcopenCompatibilityMatrixEntry {
@@ -282,6 +284,11 @@ pub fn supported_profile() -> PlcopenProfile {
                 capability: "Vendor ecosystem migration heuristics",
                 status: "partial",
                 notes: "Detected ecosystems are advisory diagnostics for migration workflows, not semantic guarantees.",
+            },
+            PlcopenCompatibilityMatrixEntry {
+                capability: "PLCopen dataTypes import (elementary/derived/array/struct/enum/subrange subset)",
+                status: "partial",
+                notes: "Supported dataType baseType nodes are imported into generated TYPE declarations; unsupported forms are reported with structured diagnostics.",
             },
             PlcopenCompatibilityMatrixEntry {
                 capability: "Vendor library compatibility shims (selected timer/edge aliases)",
@@ -312,6 +319,7 @@ pub fn supported_profile() -> PlcopenProfile {
         known_gaps: vec![
             "No import/export for SFC/LD/FBD bodies.",
             "No import of PLCopen instances/configurations/resources into runtime scheduling model.",
+            "dataTypes export is not yet implemented; import currently generates TYPE declarations under sources/.",
             "Vendor library shim coverage is limited to the published baseline alias catalog.",
             "No semantic translation for vendor-specific AOI/FB internal behavior beyond simple symbol remapping.",
             "No guaranteed equivalence for vendor pragmas, safety metadata, or online deployment tags.",
@@ -494,6 +502,7 @@ pub fn import_xml_to_project(
         BTreeMap::new();
     let mut discovered_pous = 0usize;
     let mut loss_warnings = 0usize;
+    let mut imported_data_types = 0usize;
 
     if let Some(namespace) = root.tag_name().namespace() {
         if namespace != PLCOPEN_NAMESPACE {
@@ -517,6 +526,19 @@ pub fn import_xml_to_project(
     let sources_root = project_root.join("sources");
     std::fs::create_dir_all(&sources_root)
         .with_context(|| format!("failed to create '{}'", sources_root.display()))?;
+
+    if let Some((path, count)) = import_data_types_to_sources(
+        root,
+        &sources_root,
+        &mut seen_files,
+        &mut warnings,
+        &mut unsupported_nodes,
+        &mut unsupported_diagnostics,
+        &mut loss_warnings,
+    )? {
+        imported_data_types = count;
+        written_sources.push(path);
+    }
 
     for pou in root
         .descendants()
@@ -641,16 +663,7 @@ pub fn import_xml_to_project(
             continue;
         }
 
-        let mut file_name = sanitize_filename(&name);
-        if file_name.is_empty() {
-            file_name = "unnamed".to_string();
-        }
-        let mut candidate = sources_root.join(format!("{file_name}.st"));
-        let mut duplicate_index = 2usize;
-        while !seen_files.insert(candidate.clone()) {
-            candidate = sources_root.join(format!("{file_name}_{duplicate_index}.st"));
-            duplicate_index += 1;
-        }
+        let candidate = unique_source_path(&sources_root, &name, &mut seen_files);
 
         let normalized_body = normalize_body_text(body);
         let (shimmed_body, shim_applications) =
@@ -707,7 +720,7 @@ pub fn import_xml_to_project(
         }
     }
 
-    if discovered_pous == 0 {
+    if discovered_pous == 0 && imported_data_types == 0 {
         warnings.push("no <pou> nodes discovered in input XML".to_string());
         unsupported_diagnostics.push(unsupported_diagnostic(
             "PLCO206",
@@ -720,11 +733,11 @@ pub fn import_xml_to_project(
         loss_warnings += 1;
     }
 
-    let imported_pous = written_sources.len();
-    let importable_pous = migration_entries
+    let imported_pous = migration_entries
         .iter()
         .filter(|entry| entry.status == "imported")
         .count();
+    let importable_pous = imported_pous;
     let skipped_pous = discovered_pous.saturating_sub(imported_pous);
     let source_coverage_percent = calculate_source_coverage(imported_pous, discovered_pous);
     let semantic_loss_percent = calculate_semantic_loss(
@@ -787,7 +800,7 @@ pub fn import_xml_to_project(
 
     if written_sources.is_empty() {
         anyhow::bail!(
-            "no importable PLCopen ST POUs found in {} (migration report: {})",
+            "no importable PLCopen ST content found in {} (migration report: {})",
             xml_path.display(),
             migration_report_path.display()
         );
@@ -1041,6 +1054,365 @@ fn extract_text_content(node: roxmltree::Node<'_, '_>) -> Option<String> {
     } else {
         Some(trimmed.to_string())
     }
+}
+
+fn unique_source_path(
+    sources_root: &Path,
+    base_name: &str,
+    seen_files: &mut HashSet<PathBuf>,
+) -> PathBuf {
+    let mut file_name = sanitize_filename(base_name);
+    if file_name.is_empty() {
+        file_name = "unnamed".to_string();
+    }
+    let mut candidate = sources_root.join(format!("{file_name}.st"));
+    let mut duplicate_index = 2usize;
+    while !seen_files.insert(candidate.clone()) {
+        candidate = sources_root.join(format!("{file_name}_{duplicate_index}.st"));
+        duplicate_index += 1;
+    }
+    candidate
+}
+
+fn import_data_types_to_sources(
+    root: roxmltree::Node<'_, '_>,
+    sources_root: &Path,
+    seen_files: &mut HashSet<PathBuf>,
+    warnings: &mut Vec<String>,
+    unsupported_nodes: &mut Vec<String>,
+    unsupported_diagnostics: &mut Vec<PlcopenUnsupportedDiagnostic>,
+    loss_warnings: &mut usize,
+) -> anyhow::Result<Option<(PathBuf, usize)>> {
+    let mut declarations = Vec::new();
+    let mut imported_count = 0usize;
+    let mut seen_names = BTreeSet::new();
+
+    for data_type in root
+        .descendants()
+        .filter(|node| is_element_named_ci(*node, "dataType"))
+        .filter(|node| {
+            node.ancestors()
+                .any(|ancestor| is_element_named_ci(ancestor, "dataTypes"))
+        })
+    {
+        let Some(name) = attribute_ci(data_type, "name")
+            .or_else(|| {
+                data_type
+                    .children()
+                    .find(|child| is_element_named_ci(*child, "name"))
+                    .and_then(extract_text_content)
+            })
+            .map(|raw| raw.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            unsupported_nodes.push("types/dataTypes/unnamed".to_string());
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO401",
+                "warning",
+                "types/dataTypes/dataType",
+                "dataType entry skipped because required name attribute is missing",
+                None,
+                "Provide a non-empty dataType name before import",
+            ));
+            *loss_warnings += 1;
+            continue;
+        };
+
+        let name_key = name.to_ascii_lowercase();
+        if !seen_names.insert(name_key) {
+            unsupported_nodes.push(format!("types/dataTypes/{name}"));
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO403",
+                "warning",
+                format!("types/dataTypes/{name}"),
+                format!("dataType '{}' skipped because the name is duplicated", name),
+                None,
+                "Rename duplicate dataType entries to unique names before import",
+            ));
+            *loss_warnings += 1;
+            continue;
+        }
+
+        let Some(type_expr) = parse_data_type_expression(data_type) else {
+            unsupported_nodes.push(format!("types/dataTypes/{name}"));
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO402",
+                "warning",
+                format!("types/dataTypes/{name}"),
+                format!(
+                    "dataType '{}' uses an unsupported or missing baseType representation",
+                    name
+                ),
+                None,
+                "Supported baseType subset: elementary, derived, array, struct, enum, subrange",
+            ));
+            *loss_warnings += 1;
+            continue;
+        };
+
+        declarations.push(format_data_type_declaration(&name, &type_expr));
+        imported_count += 1;
+    }
+
+    if imported_count == 0 {
+        return Ok(None);
+    }
+
+    let mut source = String::from("TYPE\n");
+    for declaration in declarations {
+        source.push_str(&declaration);
+        source.push('\n');
+    }
+    source.push_str("END_TYPE\n");
+
+    let path = unique_source_path(sources_root, GENERATED_DATA_TYPES_SOURCE_PREFIX, seen_files);
+    std::fs::write(&path, source)
+        .with_context(|| format!("failed to write imported data types '{}'", path.display()))?;
+
+    warnings.push(format!(
+        "imported {} PLCopen dataType declaration(s) into {}",
+        imported_count,
+        path.display()
+    ));
+    Ok(Some((path, imported_count)))
+}
+
+fn format_data_type_declaration(name: &str, type_expr: &str) -> String {
+    if !type_expr.contains('\n') {
+        return format!("  {name} : {type_expr};");
+    }
+
+    let mut lines = type_expr.lines();
+    let first = lines.next().unwrap_or_default();
+    let mut declaration = format!("  {name} : {first}\n");
+    for line in lines {
+        declaration.push_str("  ");
+        declaration.push_str(line);
+        declaration.push('\n');
+    }
+    if declaration.ends_with('\n') {
+        declaration.pop();
+    }
+    declaration.push(';');
+    declaration
+}
+
+fn parse_data_type_expression(data_type: roxmltree::Node<'_, '_>) -> Option<String> {
+    if let Some(base_type) = first_child_element_ci(data_type, "baseType") {
+        if let Some(expr) = parse_type_expression_container(base_type) {
+            return Some(expr);
+        }
+    }
+    if let Some(type_node) = first_child_element_ci(data_type, "type") {
+        if let Some(expr) = parse_type_expression_container(type_node) {
+            return Some(expr);
+        }
+    }
+    parse_type_expression_container(data_type)
+}
+
+fn parse_type_expression_container(container: roxmltree::Node<'_, '_>) -> Option<String> {
+    container
+        .children()
+        .find(|child| child.is_element())
+        .and_then(parse_type_expression_node)
+}
+
+fn parse_type_expression_node(node: roxmltree::Node<'_, '_>) -> Option<String> {
+    let kind = node.tag_name().name().to_ascii_lowercase();
+    if is_elementary_type_tag(&kind) {
+        return Some(kind.to_ascii_uppercase());
+    }
+
+    match kind.as_str() {
+        "derived" => attribute_ci(node, "name")
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty()),
+        "string" | "wstring" => {
+            let mut base = kind.to_ascii_uppercase();
+            if let Some(length) = attribute_ci(node, "length")
+                .or_else(|| attribute_ci(node, "maxLength"))
+                .map(|raw| raw.trim().to_string())
+                .filter(|raw| !raw.is_empty())
+            {
+                base.push('[');
+                base.push_str(&length);
+                base.push(']');
+            }
+            Some(base)
+        }
+        "array" => parse_array_type_expression(node),
+        "struct" => parse_struct_type_expression(node),
+        "enum" => parse_enum_type_expression(node),
+        "subrange" => parse_subrange_type_expression(node),
+        _ => None,
+    }
+}
+
+fn parse_array_type_expression(array_node: roxmltree::Node<'_, '_>) -> Option<String> {
+    let dimensions = array_node
+        .children()
+        .filter(|child| is_element_named_ci(*child, "dimension"))
+        .filter_map(|dimension| {
+            let lower = attribute_ci(dimension, "lower")
+                .or_else(|| attribute_ci(dimension, "lowerLimit"))?;
+            let upper = attribute_ci(dimension, "upper")
+                .or_else(|| attribute_ci(dimension, "upperLimit"))?;
+            Some(format!("{}..{}", lower.trim(), upper.trim()))
+        })
+        .collect::<Vec<_>>();
+    if dimensions.is_empty() {
+        return None;
+    }
+
+    let base_expr = first_child_element_ci(array_node, "baseType")
+        .and_then(parse_type_expression_container)
+        .or_else(|| {
+            first_child_element_ci(array_node, "type").and_then(parse_type_expression_container)
+        })?;
+    Some(format!("ARRAY[{}] OF {}", dimensions.join(", "), base_expr))
+}
+
+fn parse_struct_type_expression(struct_node: roxmltree::Node<'_, '_>) -> Option<String> {
+    let mut fields = Vec::new();
+    for variable in struct_node.children().filter(|child| {
+        is_element_named_ci(*child, "variable") || is_element_named_ci(*child, "member")
+    }) {
+        let Some(name) = attribute_ci(variable, "name")
+            .or_else(|| {
+                variable
+                    .children()
+                    .find(|child| is_element_named_ci(*child, "name"))
+                    .and_then(extract_text_content)
+            })
+            .map(|raw| raw.trim().to_string())
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        let Some(var_type) = first_child_element_ci(variable, "type")
+            .and_then(parse_type_expression_container)
+            .or_else(|| {
+                first_child_element_ci(variable, "baseType")
+                    .and_then(parse_type_expression_container)
+            })
+        else {
+            continue;
+        };
+        let initializer = first_child_element_ci(variable, "initialValue")
+            .and_then(parse_initial_value)
+            .map_or_else(String::new, |value| format!(" := {value}"));
+        fields.push(format!("    {name} : {var_type}{initializer};"));
+    }
+
+    let mut out = String::from("STRUCT\n");
+    for field in fields {
+        out.push_str(&field);
+        out.push('\n');
+    }
+    out.push_str("END_STRUCT");
+    Some(out)
+}
+
+fn parse_enum_type_expression(enum_node: roxmltree::Node<'_, '_>) -> Option<String> {
+    let values_parent = first_child_element_ci(enum_node, "values").unwrap_or(enum_node);
+    let mut values = Vec::new();
+    for value in values_parent
+        .children()
+        .filter(|child| is_element_named_ci(*child, "value"))
+    {
+        let Some(name) = attribute_ci(value, "name")
+            .or_else(|| extract_text_content(value))
+            .map(|raw| raw.trim().to_string())
+            .filter(|raw| !raw.is_empty())
+        else {
+            continue;
+        };
+        if let Some(raw_value) = attribute_ci(value, "value")
+            .map(|raw| raw.trim().to_string())
+            .filter(|raw| !raw.is_empty())
+        {
+            values.push(format!("{name} := {raw_value}"));
+        } else {
+            values.push(name);
+        }
+    }
+
+    if values.is_empty() {
+        None
+    } else {
+        Some(format!("({})", values.join(", ")))
+    }
+}
+
+fn parse_subrange_type_expression(subrange_node: roxmltree::Node<'_, '_>) -> Option<String> {
+    let lower = attribute_ci(subrange_node, "lower")
+        .or_else(|| {
+            first_child_element_ci(subrange_node, "range")
+                .and_then(|range| attribute_ci(range, "lower"))
+        })
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())?;
+    let upper = attribute_ci(subrange_node, "upper")
+        .or_else(|| {
+            first_child_element_ci(subrange_node, "range")
+                .and_then(|range| attribute_ci(range, "upper"))
+        })
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())?;
+    let base_expr = first_child_element_ci(subrange_node, "baseType")
+        .and_then(parse_type_expression_container)
+        .or_else(|| {
+            first_child_element_ci(subrange_node, "type").and_then(parse_type_expression_container)
+        })?;
+    Some(format!("{base_expr}({lower}..{upper})"))
+}
+
+fn parse_initial_value(initial_value: roxmltree::Node<'_, '_>) -> Option<String> {
+    first_child_element_ci(initial_value, "simpleValue")
+        .and_then(|simple| attribute_ci(simple, "value").or_else(|| extract_text_content(simple)))
+        .or_else(|| extract_text_content(initial_value))
+        .map(|raw| raw.trim().to_string())
+        .filter(|raw| !raw.is_empty())
+}
+
+fn first_child_element_ci<'a, 'input>(
+    node: roxmltree::Node<'a, 'input>,
+    name: &str,
+) -> Option<roxmltree::Node<'a, 'input>> {
+    node.children()
+        .find(|child| is_element_named_ci(*child, name))
+}
+
+fn is_elementary_type_tag(name: &str) -> bool {
+    matches!(
+        name,
+        "bool"
+            | "byte"
+            | "word"
+            | "dword"
+            | "lword"
+            | "sint"
+            | "int"
+            | "dint"
+            | "lint"
+            | "usint"
+            | "uint"
+            | "udint"
+            | "ulint"
+            | "real"
+            | "lreal"
+            | "time"
+            | "ltime"
+            | "date"
+            | "ldate"
+            | "tod"
+            | "ltod"
+            | "dt"
+            | "ldt"
+            | "char"
+            | "wchar"
+    )
 }
 
 fn vendor_library_shims_for_ecosystem(ecosystem: &str) -> &'static [VendorLibraryShim] {
@@ -1365,7 +1737,9 @@ fn inspect_unsupported_structure(
         if name.eq_ignore_ascii_case("types") {
             for type_child in child.children().filter(|entry| entry.is_element()) {
                 let type_name = type_child.tag_name().name();
-                if !type_name.eq_ignore_ascii_case("pous") {
+                if !type_name.eq_ignore_ascii_case("pous")
+                    && !type_name.eq_ignore_ascii_case("dataTypes")
+                {
                     unsupported_nodes.push(format!("types/{}", type_name));
                     warnings.push(format!(
                         "unsupported PLCopen node '<types>/<{}>' skipped (strict subset)",
@@ -1577,7 +1951,7 @@ END_PROGRAM
         assert!(report
             .unsupported_nodes
             .iter()
-            .any(|entry| entry.contains("types/dataTypes")));
+            .any(|entry| entry.contains("types/dataTypes/POINT")));
         assert!(report.migration_report_path.is_file());
         assert!(report.source_coverage_percent > 0.0);
         assert!(report.semantic_loss_percent > 0.0);
@@ -1585,7 +1959,7 @@ END_PROGRAM
         assert!(report
             .unsupported_diagnostics
             .iter()
-            .any(|diagnostic| diagnostic.code == "PLCO102"));
+            .any(|diagnostic| diagnostic.code == "PLCO402"));
         let source = std::fs::read_to_string(&report.written_sources[0]).expect("read source");
         assert!(source.contains("PROGRAM Main"));
         let vendor = report
@@ -1593,6 +1967,88 @@ END_PROGRAM
             .expect("vendor extension path");
         let vendor_text = std::fs::read_to_string(vendor).expect("read vendor ext");
         assert!(vendor_text.contains("vendor.raw"));
+
+        let _ = std::fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn import_supports_data_type_subset_and_generates_type_source() {
+        let project = temp_dir("plcopen-import-datatypes");
+        let xml_path = project.join("input.xml");
+        write(
+            &xml_path,
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://www.plcopen.org/xml/tc6_0200">
+  <types>
+    <dataTypes>
+      <dataType name="Speed">
+        <baseType>
+          <int />
+        </baseType>
+      </dataType>
+      <dataType name="Mode">
+        <baseType>
+          <enum>
+            <values>
+              <value name="Off"/>
+              <value name="Auto"/>
+            </values>
+          </enum>
+        </baseType>
+      </dataType>
+      <dataType name="Window">
+        <baseType>
+          <subrange lower="0" upper="100">
+            <baseType><int /></baseType>
+          </subrange>
+        </baseType>
+      </dataType>
+      <dataType name="Point">
+        <baseType>
+          <struct>
+            <variable name="X"><type><int /></type></variable>
+            <variable name="Y"><type><int /></type></variable>
+          </struct>
+        </baseType>
+      </dataType>
+      <dataType name="Samples">
+        <baseType>
+          <array>
+            <dimension lower="0" upper="15"/>
+            <baseType><int /></baseType>
+          </array>
+        </baseType>
+      </dataType>
+    </dataTypes>
+  </types>
+</project>
+"#,
+        );
+
+        let report = import_xml_to_project(&xml_path, &project).expect("import XML");
+        assert_eq!(report.imported_pous, 0);
+        assert_eq!(report.discovered_pous, 0);
+        assert_eq!(report.written_sources.len(), 1);
+        assert!(report
+            .written_sources
+            .iter()
+            .any(|path| path.ends_with("plcopen_data_types.st")));
+        assert!(!report
+            .unsupported_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "PLCO402"));
+
+        let types_source =
+            std::fs::read_to_string(&report.written_sources[0]).expect("read generated types");
+        assert!(types_source.contains("TYPE"));
+        assert!(types_source.contains("Speed : INT;"));
+        assert!(types_source.contains("Mode : (Off, Auto);"));
+        assert!(types_source.contains("Window : INT(0..100);"));
+        assert!(types_source.contains("Point : STRUCT"));
+        assert!(types_source.contains("X : INT;"));
+        assert!(types_source.contains("Y : INT;"));
+        assert!(types_source.contains("Samples : ARRAY[0..15] OF INT;"));
+        assert!(types_source.contains("END_TYPE"));
 
         let _ = std::fs::remove_dir_all(project);
     }

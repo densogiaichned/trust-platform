@@ -3818,7 +3818,9 @@ Runtime exposes a strict PLCopen XML profile through `trust-runtime plcopen`:
 
 - `trust-runtime plcopen profile` prints the supported profile contract.
 - `trust-runtime plcopen export` exports ST POUs to PLCopen XML.
-- `trust-runtime plcopen import` imports supported PLCopen POUs into `sources/`.
+- `trust-runtime plcopen import` imports supported PLCopen ST content into `sources/`:
+  - ST POUs (`PROGRAM`, `FUNCTION`, `FUNCTION_BLOCK`)
+  - supported `types/dataTypes` subset (`elementary`, `derived`, `array`, `struct`, `enum`, `subrange`) materialized as generated `TYPE` declarations
 - `trust-runtime plcopen import` also emits a migration report at
   `interop/plcopen-migration-report.json` with:
   - discovered/imported/skipped POU counts
@@ -3834,6 +3836,7 @@ Current strict subset contract:
 - Namespace: `http://www.plcopen.org/xml/tc6_0200`
 - Profile: `trust-st-strict-v1`
 - Supported POU body: `ST` text bodies for `PROGRAM`, `FUNCTION`, `FUNCTION_BLOCK`
+- Supported `dataTypes` import subset: `elementary`, `derived`, `array`, `struct`, `enum`, `subrange` baseType forms
 - Source mapping: embedded `addData` payload + sidecar `*.source-map.json`
 - Unsupported nodes: reported as warnings and preserved via vendor extension hooks
 - Vendor-variant import aliases:
@@ -3845,6 +3848,7 @@ Current strict subset contract:
     `schneider-ecostruxure`, `mitsubishi-gxworks3`, fallback `generic-plcopen`
 - Vendor-library baseline shim catalog includes selected alias normalization
   (e.g., Siemens `SFB3/4/5` -> `TP/TON/TOF`) with per-import diagnostics.
+- `dataTypes` export is currently pending; import emits supported `dataTypes` as generated ST source.
 
 Round-trip limits and known gaps are documented in
 `docs/guides/PLCOPEN_INTEROP_COMPATIBILITY.md`.
