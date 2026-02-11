@@ -3,9 +3,9 @@
   "displayName": "truST LSP",
   "description": "truST LSP — IEC 61131-3 Structured Text language support",
   "icon": "icon.png",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "publisher": "trust-platform",
-  "license": "MIT",
+  "license": "MIT OR Apache-2.0",
   "engines": {
     "vscode": "^1.108.0"
   },
@@ -23,7 +23,8 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/johannesPettersson80/trust-platform"
+    "url": "https://github.com/johannesPettersson80/trust-platform",
+    "directory": "editors/vscode"
   },
   "activationEvents": [
     "onLanguage:structured-text",

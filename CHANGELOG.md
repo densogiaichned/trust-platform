@@ -6,7 +6,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.7.0`
+Target release: `v0.7.1`
 
 ### Added
 
@@ -63,6 +63,7 @@ Target release: `v0.7.0`
 - Enabled VS Code extension integration tests in CI under virtual display (`xvfb`).
 - Expanded cancellation checks in workspace-scale LSP operations.
 - CI now includes a dedicated conformance gate with repeated-run deterministic comparison.
+- VS Code extension marketplace metadata now declares dual-license SPDX (`MIT OR Apache-2.0`) and monorepo repository directory (`editors/vscode`).
 - Documentation organization:
   - Public durable reports remain in `docs/reports/`.
   - Working remediation checklists are no longer published in `docs/reports/`.
@@ -74,8 +75,10 @@ Target release: `v0.7.0`
 
 - Parser diagnostics now report a targeted error (`expected identifier after '#'`) for malformed Siemens SCL `#` local-reference syntax instead of generic expression errors.
 - Schneider EcoStruxure vendor detection is now distinct from generic CODESYS-family heuristics in PLCopen migration reports.
+- GitHub license detection no longer reports an extra `Unknown` license entry after removing the non-standard root `LICENSE` stub (dual-license files remain `LICENSE-MIT` and `LICENSE-APACHE`).
 - Release packaging metadata:
   - VS Code extension package versions are now aligned to the workspace release version to avoid duplicate publish artifacts from prior extension versions.
+- VS Code Marketplace screenshots now use absolute image URLs from GitHub raw content so images render reliably in extension listing pages.
 - `%MW` memory marker force/write synchronization in runtime I/O panel flow.
 - Debug adapter force latch behavior and state-lock interaction.
 - Debug runner now respects configured task interval pacing.

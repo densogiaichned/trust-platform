@@ -66,13 +66,13 @@ Open it in VS Code:
 ## Screenshots
 
 ### Debug + Runtime in one view
-![Debug + Runtime](assets/debug.png)
+![Debug + Runtime](https://raw.githubusercontent.com/johannesPettersson80/trust-platform/main/editors/vscode/assets/debug.png)
 
 ### Runtime I/O panel
-![Runtime I/O panel](assets/hero-runtime.png)
+![Runtime I/O panel](https://raw.githubusercontent.com/johannesPettersson80/trust-platform/main/editors/vscode/assets/hero-runtime.png)
 
 ### Rename across files
-![Rename across files](assets/rename.png)
+![Rename across files](https://raw.githubusercontent.com/johannesPettersson80/trust-platform/main/editors/vscode/assets/rename.png)
 
 ---
 

@@ -28,6 +28,7 @@ editors/vscode/.vscode-test/
 # Local debug/lsp binaries (too large for GitHub; built locally)
 editors/vscode/bin/trust-debug
 editors/vscode/bin/trust-lsp
+editors/vscode/bin/trust-runtime
 manual-tests/**/target/
 manual-tests/**/.vscode/
 
