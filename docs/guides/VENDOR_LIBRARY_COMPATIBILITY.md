@@ -5,7 +5,7 @@ through `trust-runtime plcopen import`.
 
 ## Scope
 
-- Interchange entrypoint: PLCopen XML strict subset import (`trust-runtime plcopen import`).
+- Interchange entrypoint: PLCopen XML ST-complete import (`trust-runtime plcopen import`).
 - Goal: normalize selected high-demand vendor aliases into IEC FB names where
   semantic intent is clear.
 - Non-goal: claim full semantic equivalence for proprietary AOI/library internals.

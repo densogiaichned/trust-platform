@@ -3812,18 +3812,20 @@ ANY
 
 ---
 
-### Appendix C: PLCopen XML Interchange (Strict Subset)
+### Appendix C: PLCopen XML Interchange (ST-Complete)
 
-Runtime exposes a strict PLCopen XML profile through `trust-runtime plcopen`:
+Runtime exposes an ST-complete PLCopen XML profile through `trust-runtime plcopen`:
 
 - `trust-runtime plcopen profile` prints the supported profile contract.
-- `trust-runtime plcopen export` exports ST POUs to PLCopen XML.
-- `trust-runtime plcopen import` imports supported PLCopen ST content into `sources/`:
+- `trust-runtime plcopen export` exports ST project content to PLCopen XML.
+- `trust-runtime plcopen import` imports supported PLCopen ST project content into `sources/`:
   - ST POUs (`PROGRAM`, `FUNCTION`, `FUNCTION_BLOCK`)
   - supported `types/dataTypes` subset (`elementary`, `derived`, `array`, `struct`, `enum`, `subrange`) materialized as generated `TYPE` declarations
-- `trust-runtime plcopen import` also emits a migration report at
+  - project model declarations in `instances/configurations/resources/tasks/program instances`
+- `trust-runtime plcopen import` emits a migration report at
   `interop/plcopen-migration-report.json` with:
   - discovered/imported/skipped POU counts
+  - imported type/project-model counts (`imported_data_types`, `discovered_configurations`, `imported_configurations`, `imported_resources`, `imported_tasks`, `imported_program_instances`)
   - source coverage (% imported/discovered)
   - semantic-loss score (weighted from skipped POUs + unsupported nodes/warnings)
   - compatibility coverage summary (`supported_items`, `partial_items`, `unsupported_items`, `support_percent`, `verdict`)
@@ -3831,14 +3833,15 @@ Runtime exposes a strict PLCopen XML profile through `trust-runtime plcopen`:
   - applied vendor-library shim summary (`vendor`, `source_symbol`, `replacement_symbol`, `occurrences`, `notes`)
   - per-POU entry status (`imported` or `skipped`) and skip reasons
 
-Current strict subset contract:
+Current ST-complete contract:
 
 - Namespace: `http://www.plcopen.org/xml/tc6_0200`
-- Profile: `trust-st-strict-v1`
+- Profile: `trust-st-complete-v1`
 - Supported POU body: `ST` text bodies for `PROGRAM`, `FUNCTION`, `FUNCTION_BLOCK`
-- Supported `dataTypes` import subset: `elementary`, `derived`, `array`, `struct`, `enum`, `subrange` baseType forms
+- Supported `dataTypes` baseType subset: `elementary`, `derived`, `array`, `struct`, `enum`, `subrange`
+- Supported project model: `instances/configurations/resources/tasks/program instances`
 - Source mapping: embedded `addData` payload + sidecar `*.source-map.json`
-- Unsupported nodes: reported as warnings and preserved via vendor extension hooks
+- Unsupported nodes: reported as diagnostics and preserved via vendor extension hooks where applicable
 - Vendor-variant import aliases:
   - `PROGRAM`/`PRG` -> `program`
   - `FUNCTION`/`FC`/`FUN` -> `function`
@@ -3848,7 +3851,14 @@ Current strict subset contract:
     `schneider-ecostruxure`, `mitsubishi-gxworks3`, fallback `generic-plcopen`
 - Vendor-library baseline shim catalog includes selected alias normalization
   (e.g., Siemens `SFB3/4/5` -> `TP/TON/TOF`) with per-import diagnostics.
-- `dataTypes` export is currently pending; import emits supported `dataTypes` as generated ST source.
+
+Deliverable 5 parity fixture gate:
+
+- CODESYS ST fixture pack (`small`/`medium`/`large`) with deterministic expected
+  migration artifacts under:
+  - `crates/trust-runtime/tests/fixtures/plcopen/codesys_st_complete/`
+- Schema-drift parity regression test:
+  - `crates/trust-runtime/tests/plcopen_st_complete_parity.rs`
 
 Round-trip limits and known gaps are documented in
 `docs/guides/PLCOPEN_INTEROP_COMPATIBILITY.md`.

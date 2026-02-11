@@ -25,6 +25,9 @@ PLCopen compatibility matrix, migration diagnostics contract, round-trip limits,
 and known gaps are documented in:
 `docs/guides/PLCOPEN_INTEROP_COMPATIBILITY.md`.
 
+ST-complete import/export walkthrough example:
+`examples/plcopen_xml_st_complete/README.md`.
+
 ## Vendor Library Compatibility
 
 Vendor library baseline shim coverage and compatibility matrix are documented in:

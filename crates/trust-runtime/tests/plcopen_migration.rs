@@ -129,7 +129,7 @@ fn migration_import_siemens_fixture_reports_vendor_coverage() {
     assert!(report
         .unsupported_diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.code == "PLCO101"));
+        .any(|diagnostic| diagnostic.code == "PLCO501"));
     assert!(report
         .unsupported_diagnostics
         .iter()

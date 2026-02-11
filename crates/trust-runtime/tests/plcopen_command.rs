@@ -74,7 +74,7 @@ fn plcopen_profile_json_emits_contract() {
             .get("profile")
             .and_then(serde_json::Value::as_str)
             .expect("profile"),
-        "trust-st-strict-v1"
+        "trust-st-complete-v1"
     );
     assert!(value["compatibility_matrix"]
         .as_array()

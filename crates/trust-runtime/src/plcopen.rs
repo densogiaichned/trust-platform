@@ -12,7 +12,7 @@ use trust_syntax::parser;
 use trust_syntax::syntax::{SyntaxKind, SyntaxNode};
 
 const PLCOPEN_NAMESPACE: &str = "http://www.plcopen.org/xml/tc6_0200";
-const PROFILE_NAME: &str = "trust-st-strict-v1";
+const PROFILE_NAME: &str = "trust-st-complete-v1";
 const SOURCE_MAP_DATA_NAME: &str = "trust.sourceMap";
 const VENDOR_EXT_DATA_NAME: &str = "trust.vendorExtensions";
 const VENDOR_EXTENSION_HOOK_FILE: &str = "plcopen.vendor-extensions.xml";
@@ -90,6 +90,11 @@ pub struct PlcopenExportReport {
     pub output_path: PathBuf,
     pub source_map_path: PathBuf,
     pub pou_count: usize,
+    pub data_type_count: usize,
+    pub configuration_count: usize,
+    pub resource_count: usize,
+    pub task_count: usize,
+    pub program_instance_count: usize,
     pub source_count: usize,
     pub warnings: Vec<String>,
 }
@@ -100,6 +105,12 @@ pub struct PlcopenImportReport {
     pub written_sources: Vec<PathBuf>,
     pub imported_pous: usize,
     pub discovered_pous: usize,
+    pub imported_data_types: usize,
+    pub discovered_configurations: usize,
+    pub imported_configurations: usize,
+    pub imported_resources: usize,
+    pub imported_tasks: usize,
+    pub imported_program_instances: usize,
     pub warnings: Vec<String>,
     pub unsupported_nodes: Vec<String>,
     pub preserved_vendor_extensions: Option<PathBuf>,
@@ -123,6 +134,12 @@ pub struct PlcopenMigrationReport {
     pub importable_pous: usize,
     pub imported_pous: usize,
     pub skipped_pous: usize,
+    pub imported_data_types: usize,
+    pub discovered_configurations: usize,
+    pub imported_configurations: usize,
+    pub imported_resources: usize,
+    pub imported_tasks: usize,
+    pub imported_program_instances: usize,
     pub source_coverage_percent: f64,
     pub semantic_loss_percent: f64,
     pub compatibility_coverage: PlcopenCompatibilityCoverage,
@@ -200,6 +217,55 @@ struct PouDecl {
     line: usize,
 }
 
+#[derive(Debug, Clone)]
+struct DataTypeDecl {
+    name: String,
+    type_expr: String,
+    source: String,
+    line: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TaskDecl {
+    name: String,
+    interval: Option<String>,
+    single: Option<String>,
+    priority: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ProgramBindingDecl {
+    instance_name: String,
+    task_name: Option<String>,
+    type_name: String,
+}
+
+#[derive(Debug, Clone)]
+struct ResourceDecl {
+    name: String,
+    target: String,
+    tasks: Vec<TaskDecl>,
+    programs: Vec<ProgramBindingDecl>,
+}
+
+#[derive(Debug, Clone)]
+struct ConfigurationDecl {
+    name: String,
+    tasks: Vec<TaskDecl>,
+    programs: Vec<ProgramBindingDecl>,
+    resources: Vec<ResourceDecl>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ImportProjectModelStats {
+    discovered_configurations: usize,
+    imported_configurations: usize,
+    imported_resources: usize,
+    imported_tasks: usize,
+    imported_program_instances: usize,
+    written_sources: Vec<PathBuf>,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum PlcopenPouType {
     Program,
@@ -250,16 +316,16 @@ pub fn supported_profile() -> PlcopenProfile {
     PlcopenProfile {
         namespace: PLCOPEN_NAMESPACE,
         profile: PROFILE_NAME,
-        version: "TC6 XML v2.0 (strict subset)",
+        version: "TC6 XML v2.0 (ST-complete subset)",
         strict_subset: vec![
             "project/fileHeader/contentHeader",
             "types/pous/pou[pouType=program|function|functionBlock]",
-            "types/dataTypes/dataType[baseType subset: elementary|derived|array|struct|enum|subrange]",
+            "types/dataTypes/dataType[baseType subset: elementary|derived|array|struct|enum|subrange] (import/export)",
+            "instances/configurations/resources/tasks/program instances",
             "pou/body/ST plain-text bodies",
             "addData/data[name=trust.sourceMap|trust.vendorExtensions]",
         ],
         unsupported_nodes: vec![
-            "instances/configurations/resources",
             "graphical bodies (FBD/LD/SFC)",
             "vendor-specific nodes (preserved via hooks, not interpreted)",
             "dataTypes outside supported baseType subset",
@@ -287,8 +353,18 @@ pub fn supported_profile() -> PlcopenProfile {
             },
             PlcopenCompatibilityMatrixEntry {
                 capability: "PLCopen dataTypes import (elementary/derived/array/struct/enum/subrange subset)",
+                status: "supported",
+                notes: "Supported dataType baseType nodes are imported into generated ST TYPE declarations under sources/.",
+            },
+            PlcopenCompatibilityMatrixEntry {
+                capability: "PLCopen dataTypes export (elementary/derived/array/struct/enum/subrange subset)",
                 status: "partial",
-                notes: "Supported dataType baseType nodes are imported into generated TYPE declarations; unsupported forms are reported with structured diagnostics.",
+                notes: "Export emits supported TYPE declarations into types/dataTypes. Unsupported ST forms are skipped with warnings.",
+            },
+            PlcopenCompatibilityMatrixEntry {
+                capability: "Project model import/export (instances/configurations/resources/tasks/program instances)",
+                status: "supported",
+                notes: "ST configuration/resource/task/program-instance model is imported/exported with deterministic naming and diagnostics.",
             },
             PlcopenCompatibilityMatrixEntry {
                 capability: "Vendor library compatibility shims (selected timer/edge aliases)",
@@ -296,9 +372,9 @@ pub fn supported_profile() -> PlcopenProfile {
                 notes: "Import can normalize selected Siemens/Rockwell/Schneider/Mitsubishi aliases to IEC FB names and reports each shim application.",
             },
             PlcopenCompatibilityMatrixEntry {
-                capability: "Graphical bodies (FBD/LD/SFC) and project-level runtime resources",
+                capability: "Graphical bodies (FBD/LD/SFC) and advanced runtime deployment resources",
                 status: "unsupported",
-                notes: "Strict subset is ST-only and does not import graphical networks/configuration/resource execution models.",
+                notes: "ST-complete subset remains ST-only and does not import graphical networks or advanced deployment metadata semantics.",
             },
             PlcopenCompatibilityMatrixEntry {
                 capability: "Vendor AOIs, advanced library semantics, and platform-specific pragmas",
@@ -310,7 +386,9 @@ pub fn supported_profile() -> PlcopenProfile {
         vendor_extension_hook:
             "Import preserves unknown addData/vendor nodes to plcopen.vendor-extensions.imported.xml; export re-injects plcopen.vendor-extensions.xml.",
         round_trip_limits: vec![
-            "Round-trip guarantees preserve ST POU signatures (name/type/body intent) for strict-subset inputs.",
+            "Round-trip guarantees preserve ST POU signatures (name/type/body intent) for ST-complete supported inputs.",
+            "Round-trip guarantees preserve supported ST dataType signatures (name + supported baseType graph).",
+            "Round-trip guarantees preserve supported configuration/resource/task/program-instance wiring intent.",
             "Round-trip does not preserve vendor formatting/layout, graphical networks, or runtime deployment metadata.",
             "Round-trip can rename output source files to sanitized unique names inside sources/.",
             "Round-trip may normalize selected vendor library symbols to IEC equivalents when shim rules apply during import.",
@@ -318,8 +396,6 @@ pub fn supported_profile() -> PlcopenProfile {
         ],
         known_gaps: vec![
             "No import/export for SFC/LD/FBD bodies.",
-            "No import of PLCopen instances/configurations/resources into runtime scheduling model.",
-            "dataTypes export is not yet implemented; import currently generates TYPE declarations under sources/.",
             "Vendor library shim coverage is limited to the published baseline alias catalog.",
             "No semantic translation for vendor-specific AOI/FB internal behavior beyond simple symbol remapping.",
             "No guaranteed equivalence for vendor pragmas, safety metadata, or online deployment tags.",
@@ -346,16 +422,26 @@ pub fn export_project_to_xml(
 
     let mut warnings = Vec::new();
     let mut declarations = Vec::new();
+    let mut data_type_decls = Vec::new();
+    let mut configurations = Vec::new();
 
     for source in &sources {
         let (mut declared, mut source_warnings) = extract_pou_declarations(source);
         declarations.append(&mut declared);
         warnings.append(&mut source_warnings);
+
+        let (mut declared_types, mut type_warnings) = extract_data_type_declarations(source);
+        data_type_decls.append(&mut declared_types);
+        warnings.append(&mut type_warnings);
+
+        let (mut source_configs, mut config_warnings) = extract_configuration_declarations(source);
+        configurations.append(&mut source_configs);
+        warnings.append(&mut config_warnings);
     }
 
-    if declarations.is_empty() {
+    if declarations.is_empty() && data_type_decls.is_empty() && configurations.is_empty() {
         anyhow::bail!(
-            "no PLCopen-compatible POU declarations discovered (supported: PROGRAM/FUNCTION/FUNCTION_BLOCK)"
+            "no PLCopen ST-complete declarations discovered (supported: POUs, TYPE blocks, CONFIGURATION/RESOURCE/TASK/PROGRAM)"
         );
     }
 
@@ -365,6 +451,63 @@ pub fn export_project_to_xml(
             .cmp(right.pou_type.as_xml())
             .then(left.name.cmp(&right.name))
             .then(left.source.cmp(&right.source))
+    });
+
+    data_type_decls.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+            .then(left.source.cmp(&right.source))
+            .then(left.line.cmp(&right.line))
+    });
+
+    let mut deduped_types = Vec::new();
+    let mut seen_type_names = BTreeSet::new();
+    for decl in data_type_decls {
+        let key = decl.name.to_ascii_lowercase();
+        if seen_type_names.insert(key) {
+            deduped_types.push(decl);
+        } else {
+            warnings.push(format!(
+                "{}:{} duplicate TYPE declaration '{}' skipped for PLCopen export",
+                decl.source, decl.line, decl.name
+            ));
+        }
+    }
+
+    for config in &mut configurations {
+        config.tasks.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+        });
+        config.programs.sort_by(|left, right| {
+            left.instance_name
+                .to_ascii_lowercase()
+                .cmp(&right.instance_name.to_ascii_lowercase())
+        });
+        config.resources.sort_by(|left, right| {
+            left.name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase())
+        });
+        for resource in &mut config.resources {
+            resource.tasks.sort_by(|left, right| {
+                left.name
+                    .to_ascii_lowercase()
+                    .cmp(&right.name.to_ascii_lowercase())
+            });
+            resource.programs.sort_by(|left, right| {
+                left.instance_name
+                    .to_ascii_lowercase()
+                    .cmp(&right.instance_name.to_ascii_lowercase())
+            });
+        }
+    }
+    configurations.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
     });
 
     let source_map = SourceMapPayload {
@@ -404,6 +547,37 @@ pub fn export_project_to_xml(
         escape_xml_attr(project_name)
     ));
     xml.push_str("  <types>\n");
+
+    let mut exported_data_type_count = 0usize;
+    if !deduped_types.is_empty() {
+        xml.push_str("    <dataTypes>\n");
+        for data_type in &deduped_types {
+            if let Some(base_type_xml) =
+                type_expression_to_plcopen_base_type_xml(&data_type.type_expr)
+            {
+                xml.push_str(&format!(
+                    "      <dataType name=\"{}\">\n",
+                    escape_xml_attr(&data_type.name)
+                ));
+                xml.push_str("        <baseType>\n");
+                for line in base_type_xml.lines() {
+                    xml.push_str("          ");
+                    xml.push_str(line);
+                    xml.push('\n');
+                }
+                xml.push_str("        </baseType>\n");
+                xml.push_str("      </dataType>\n");
+                exported_data_type_count += 1;
+            } else {
+                warnings.push(format!(
+                    "{}:{} unsupported TYPE expression for '{}' skipped in PLCopen dataTypes export",
+                    data_type.source, data_type.line, data_type.name
+                ));
+            }
+        }
+        xml.push_str("    </dataTypes>\n");
+    }
+
     xml.push_str("    <pous>\n");
 
     for decl in &declarations {
@@ -422,6 +596,52 @@ pub fn export_project_to_xml(
 
     xml.push_str("    </pous>\n");
     xml.push_str("  </types>\n");
+
+    let mut exported_resource_count = 0usize;
+    let mut exported_task_count = 0usize;
+    let mut exported_program_instance_count = 0usize;
+    if !configurations.is_empty() {
+        xml.push_str("  <instances>\n");
+        xml.push_str("    <configurations>\n");
+        for configuration in &configurations {
+            xml.push_str(&format!(
+                "      <configuration name=\"{}\">\n",
+                escape_xml_attr(&configuration.name)
+            ));
+
+            for task in &configuration.tasks {
+                append_task_xml(&mut xml, task, 8);
+                exported_task_count += 1;
+            }
+            for program in &configuration.programs {
+                append_program_instance_xml(&mut xml, program, 8);
+                exported_program_instance_count += 1;
+            }
+
+            for resource in &configuration.resources {
+                exported_resource_count += 1;
+                xml.push_str(&format!(
+                    "        <resource name=\"{}\" target=\"{}\">\n",
+                    escape_xml_attr(&resource.name),
+                    escape_xml_attr(&resource.target)
+                ));
+                for task in &resource.tasks {
+                    append_task_xml(&mut xml, task, 10);
+                    exported_task_count += 1;
+                }
+                for program in &resource.programs {
+                    append_program_instance_xml(&mut xml, program, 10);
+                    exported_program_instance_count += 1;
+                }
+                xml.push_str("        </resource>\n");
+            }
+
+            xml.push_str("      </configuration>\n");
+        }
+        xml.push_str("    </configurations>\n");
+        xml.push_str("  </instances>\n");
+    }
+
     xml.push_str("  <addData>\n");
     xml.push_str(&format!(
         "    <data name=\"{}\" handleUnknown=\"implementation\"><text><![CDATA[{}]]></text></data>\n",
@@ -470,6 +690,11 @@ pub fn export_project_to_xml(
         output_path: output_path.to_path_buf(),
         source_map_path,
         pou_count: declarations.len(),
+        data_type_count: exported_data_type_count,
+        configuration_count: configurations.len(),
+        resource_count: exported_resource_count,
+        task_count: exported_task_count,
+        program_instance_count: exported_program_instance_count,
         source_count: sources.len(),
         warnings,
     })
@@ -540,6 +765,17 @@ pub fn import_xml_to_project(
         written_sources.push(path);
     }
 
+    let project_model_stats = import_project_model_to_sources(
+        root,
+        &sources_root,
+        &mut seen_files,
+        &mut warnings,
+        &mut unsupported_nodes,
+        &mut unsupported_diagnostics,
+        &mut loss_warnings,
+    )?;
+    written_sources.extend(project_model_stats.written_sources.iter().cloned());
+
     for pou in root
         .descendants()
         .filter(|node| is_element_named_ci(*node, "pou"))
@@ -605,7 +841,7 @@ pub fn import_xml_to_project(
                 "PLCO203",
                 "warning",
                 format!("pouType:{pou_type_raw}"),
-                format!("POU type '{pou_type_raw}' is outside the strict subset"),
+                format!("POU type '{pou_type_raw}' is outside the ST-complete subset"),
                 Some(name.clone()),
                 "POU skipped; convert to PROGRAM/FUNCTION/FUNCTION_BLOCK or supported aliases",
             ));
@@ -787,6 +1023,12 @@ pub fn import_xml_to_project(
         importable_pous,
         imported_pous,
         skipped_pous,
+        imported_data_types,
+        discovered_configurations: project_model_stats.discovered_configurations,
+        imported_configurations: project_model_stats.imported_configurations,
+        imported_resources: project_model_stats.imported_resources,
+        imported_tasks: project_model_stats.imported_tasks,
+        imported_program_instances: project_model_stats.imported_program_instances,
         source_coverage_percent,
         semantic_loss_percent,
         compatibility_coverage: compatibility_coverage.clone(),
@@ -810,6 +1052,12 @@ pub fn import_xml_to_project(
         project_root: project_root.to_path_buf(),
         imported_pous,
         discovered_pous,
+        imported_data_types,
+        discovered_configurations: project_model_stats.discovered_configurations,
+        imported_configurations: project_model_stats.imported_configurations,
+        imported_resources: project_model_stats.imported_resources,
+        imported_tasks: project_model_stats.imported_tasks,
+        imported_program_instances: project_model_stats.imported_program_instances,
         written_sources,
         warnings,
         unsupported_nodes,
@@ -862,7 +1110,7 @@ fn extract_pou_declarations(source: &LoadedSource) -> (Vec<PouDecl>, Vec<String>
             if is_unsupported_top_level(&node) {
                 let line = line_for_node(&source.text, &node);
                 warnings.push(format!(
-                    "{}:{} unsupported top-level node '{:?}' skipped for PLCopen strict subset",
+                    "{}:{} unsupported top-level node '{:?}' skipped for PLCopen ST-complete subset",
                     source.path.display(),
                     line,
                     node.kind()
@@ -1074,6 +1322,559 @@ fn unique_source_path(
     candidate
 }
 
+fn append_indent(xml: &mut String, spaces: usize) {
+    for _ in 0..spaces {
+        xml.push(' ');
+    }
+}
+
+fn append_task_xml(xml: &mut String, task: &TaskDecl, indent: usize) {
+    append_indent(xml, indent);
+    xml.push_str(&format!("<task name=\"{}\"", escape_xml_attr(&task.name)));
+    if let Some(interval) = &task.interval {
+        xml.push_str(&format!(" interval=\"{}\"", escape_xml_attr(interval)));
+    }
+    if let Some(single) = &task.single {
+        xml.push_str(&format!(" single=\"{}\"", escape_xml_attr(single)));
+    }
+    if let Some(priority) = &task.priority {
+        xml.push_str(&format!(" priority=\"{}\"", escape_xml_attr(priority)));
+    }
+    xml.push_str(" />\n");
+}
+
+fn append_program_instance_xml(xml: &mut String, program: &ProgramBindingDecl, indent: usize) {
+    append_indent(xml, indent);
+    xml.push_str(&format!(
+        "<pouInstance name=\"{}\" typeName=\"{}\"",
+        escape_xml_attr(&program.instance_name),
+        escape_xml_attr(&program.type_name)
+    ));
+    if let Some(task_name) = &program.task_name {
+        xml.push_str(&format!(" task=\"{}\"", escape_xml_attr(task_name)));
+    }
+    xml.push_str(" />\n");
+}
+
+fn extract_data_type_declarations(source: &LoadedSource) -> (Vec<DataTypeDecl>, Vec<String>) {
+    let mut declarations = Vec::new();
+    let mut warnings = Vec::new();
+    let lines = source.text.lines().collect::<Vec<_>>();
+    let mut line_index = 0usize;
+
+    while line_index < lines.len() {
+        if !lines[line_index].trim().eq_ignore_ascii_case("TYPE") {
+            line_index += 1;
+            continue;
+        }
+
+        line_index += 1;
+        let mut declaration_text = String::new();
+        let mut declaration_start_line = line_index + 1;
+        let mut struct_depth = 0usize;
+
+        while line_index < lines.len() {
+            let raw_line = lines[line_index];
+            let trimmed = raw_line.trim();
+
+            if trimmed.eq_ignore_ascii_case("END_TYPE") {
+                if !declaration_text.trim().is_empty() {
+                    warnings.push(format!(
+                        "{}:{} unfinished TYPE declaration skipped during PLCopen export",
+                        source.path.display(),
+                        declaration_start_line
+                    ));
+                }
+                break;
+            }
+
+            if trimmed.is_empty() {
+                line_index += 1;
+                continue;
+            }
+
+            if declaration_text.trim().is_empty() {
+                declaration_start_line = line_index + 1;
+            }
+
+            if !declaration_text.is_empty() {
+                declaration_text.push('\n');
+            }
+            declaration_text.push_str(raw_line.trim_end());
+
+            let upper = trimmed.to_ascii_uppercase();
+            if upper.contains(": STRUCT") || upper == "STRUCT" {
+                struct_depth = struct_depth.saturating_add(1);
+            }
+            if upper.contains("END_STRUCT") {
+                struct_depth = struct_depth.saturating_sub(1);
+            }
+
+            if struct_depth == 0 && trimmed.ends_with(';') {
+                if let Some((name, type_expr)) = parse_type_declaration_text(&declaration_text) {
+                    declarations.push(DataTypeDecl {
+                        name,
+                        type_expr,
+                        source: source.path.display().to_string(),
+                        line: declaration_start_line,
+                    });
+                } else {
+                    warnings.push(format!(
+                        "{}:{} unsupported TYPE declaration skipped during PLCopen export",
+                        source.path.display(),
+                        declaration_start_line
+                    ));
+                }
+                declaration_text.clear();
+            }
+
+            line_index += 1;
+        }
+
+        line_index += 1;
+    }
+
+    (declarations, warnings)
+}
+
+fn parse_type_declaration_text(text: &str) -> Option<(String, String)> {
+    let trimmed = text.trim();
+    let colon = trimmed.find(':')?;
+    let name = trimmed[..colon].trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let mut expr = trimmed[colon + 1..].trim().to_string();
+    if expr.ends_with(';') {
+        expr.pop();
+    }
+    let expr = expr.trim().to_string();
+    if expr.is_empty() {
+        None
+    } else {
+        Some((name, expr))
+    }
+}
+
+fn extract_configuration_declarations(
+    source: &LoadedSource,
+) -> (Vec<ConfigurationDecl>, Vec<String>) {
+    let mut declarations = Vec::new();
+    let mut warnings = Vec::new();
+    let lines = source.text.lines().collect::<Vec<_>>();
+    let mut line_index = 0usize;
+
+    while line_index < lines.len() {
+        let line = lines[line_index];
+        if !line
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with("CONFIGURATION ")
+        {
+            line_index += 1;
+            continue;
+        }
+
+        let Some(name) = line
+            .split_whitespace()
+            .nth(1)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+        else {
+            warnings.push(format!(
+                "{}:{} CONFIGURATION declaration without name skipped",
+                source.path.display(),
+                line_index + 1
+            ));
+            line_index += 1;
+            continue;
+        };
+
+        let mut configuration = ConfigurationDecl {
+            name,
+            tasks: Vec::new(),
+            programs: Vec::new(),
+            resources: Vec::new(),
+        };
+        line_index += 1;
+
+        while line_index < lines.len() {
+            let body_line = lines[line_index].trim();
+            if body_line.eq_ignore_ascii_case("END_CONFIGURATION") {
+                break;
+            }
+
+            if body_line.to_ascii_uppercase().starts_with("RESOURCE ") {
+                let (resource_name, target) =
+                    parse_resource_header(body_line).unwrap_or_else(|| {
+                        (
+                            format!("Resource{}", configuration.resources.len() + 1),
+                            "CPU".to_string(),
+                        )
+                    });
+                let mut resource = ResourceDecl {
+                    name: resource_name,
+                    target,
+                    tasks: Vec::new(),
+                    programs: Vec::new(),
+                };
+                line_index += 1;
+                while line_index < lines.len() {
+                    let resource_line = lines[line_index].trim();
+                    if resource_line.eq_ignore_ascii_case("END_RESOURCE") {
+                        break;
+                    }
+                    if let Some(task) = parse_task_declaration_line(resource_line) {
+                        resource.tasks.push(task);
+                    } else if let Some(program) = parse_program_binding_line(resource_line) {
+                        resource.programs.push(program);
+                    }
+                    line_index += 1;
+                }
+                configuration.resources.push(resource);
+            } else if let Some(task) = parse_task_declaration_line(body_line) {
+                configuration.tasks.push(task);
+            } else if let Some(program) = parse_program_binding_line(body_line) {
+                configuration.programs.push(program);
+            }
+
+            line_index += 1;
+        }
+
+        declarations.push(configuration);
+        line_index += 1;
+    }
+
+    (declarations, warnings)
+}
+
+fn parse_resource_header(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim().trim_end_matches(';');
+    let mut parts = trimmed.split_whitespace();
+    if !parts.next()?.eq_ignore_ascii_case("RESOURCE") {
+        return None;
+    }
+    let name = parts.next()?.to_string();
+    let mut target = "CPU".to_string();
+    while let Some(token) = parts.next() {
+        if token.eq_ignore_ascii_case("ON") {
+            if let Some(value) = parts.next() {
+                target = value.to_string();
+            }
+            break;
+        }
+    }
+    Some((name, target))
+}
+
+fn parse_task_declaration_line(line: &str) -> Option<TaskDecl> {
+    let trimmed = line.trim();
+    if !trimmed.to_ascii_uppercase().starts_with("TASK ") {
+        return None;
+    }
+    let no_suffix = trimmed.trim_end_matches(';');
+    let rest = no_suffix.get(4..)?.trim();
+    let task_name_end = rest
+        .find(|ch: char| ch.is_whitespace() || ch == '(')
+        .unwrap_or(rest.len());
+    let name = rest[..task_name_end].trim();
+    if name.is_empty() {
+        return None;
+    }
+
+    let mut task = TaskDecl {
+        name: name.to_string(),
+        ..TaskDecl::default()
+    };
+
+    if let (Some(open), Some(close)) = (rest.find('('), rest.rfind(')')) {
+        if close > open {
+            let init = &rest[open + 1..close];
+            for item in init.split(',') {
+                let Some((key, value)) = item.split_once(":=") else {
+                    continue;
+                };
+                let key = key.trim().to_ascii_uppercase();
+                let value = value.trim();
+                if value.is_empty() {
+                    continue;
+                }
+                match key.as_str() {
+                    "INTERVAL" => task.interval = Some(normalize_task_interval_literal(value)),
+                    "SINGLE" => task.single = Some(value.to_string()),
+                    "PRIORITY" => task.priority = Some(value.to_string()),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Some(task)
+}
+
+fn normalize_task_interval_literal(value: &str) -> String {
+    let trimmed = value.trim();
+    let upper = trimmed.to_ascii_uppercase();
+    if upper.starts_with("T#") || upper.starts_with("TIME#") || upper.starts_with("LTIME#") {
+        return trimmed.to_string();
+    }
+    if upper.starts_with("PT") && upper.ends_with('S') {
+        let number = &upper[2..upper.len() - 1];
+        if let Ok(seconds) = number.parse::<f64>() {
+            if seconds >= 1.0 && (seconds.fract() - 0.0).abs() < f64::EPSILON {
+                return format!("T#{}s", seconds as u64);
+            }
+            return format!("T#{}ms", (seconds * 1000.0).round() as i64);
+        }
+    }
+    if upper.starts_with("PT") && upper.ends_with("MS") {
+        let number = &upper[2..upper.len() - 2];
+        if let Ok(millis) = number.parse::<i64>() {
+            return format!("T#{}ms", millis);
+        }
+    }
+    trimmed.to_string()
+}
+
+fn parse_program_binding_line(line: &str) -> Option<ProgramBindingDecl> {
+    let trimmed = line.trim();
+    if !trimmed.to_ascii_uppercase().starts_with("PROGRAM ") {
+        return None;
+    }
+    let mut rest = trimmed.trim_end_matches(';').get(7..)?.trim();
+    if rest.to_ascii_uppercase().starts_with("RETAIN ") {
+        rest = rest.get(7..)?.trim();
+    } else if rest.to_ascii_uppercase().starts_with("NON_RETAIN ") {
+        rest = rest.get(11..)?.trim();
+    }
+    let (lhs, rhs) = rest.split_once(':')?;
+    let mut lhs_parts = lhs.split_whitespace();
+    let instance_name = lhs_parts.next()?.trim().to_string();
+    if instance_name.is_empty() {
+        return None;
+    }
+
+    let mut task_name = None;
+    while let Some(token) = lhs_parts.next() {
+        if token.eq_ignore_ascii_case("WITH") {
+            task_name = lhs_parts.next().map(ToOwned::to_owned);
+            break;
+        }
+    }
+
+    let rhs = rhs.trim();
+    let type_name = rhs
+        .split_once('(')
+        .map_or(rhs, |(head, _)| head)
+        .trim()
+        .trim_end_matches(';')
+        .to_string();
+    if type_name.is_empty() {
+        return None;
+    }
+
+    Some(ProgramBindingDecl {
+        instance_name,
+        task_name,
+        type_name,
+    })
+}
+
+fn type_expression_to_plcopen_base_type_xml(type_expr: &str) -> Option<String> {
+    let trimmed = type_expr.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let upper = trimmed.to_ascii_uppercase();
+
+    if upper.starts_with("ARRAY[") {
+        return type_expr_array_to_xml(trimmed);
+    }
+    if upper.starts_with("STRUCT") {
+        return type_expr_struct_to_xml(trimmed);
+    }
+    if trimmed.starts_with('(') && trimmed.ends_with(')') {
+        return type_expr_enum_to_xml(trimmed);
+    }
+    if let Some(value) = type_expr_subrange_to_xml(trimmed) {
+        return Some(value);
+    }
+    type_expr_simple_to_xml(trimmed)
+}
+
+fn type_expr_array_to_xml(type_expr: &str) -> Option<String> {
+    let open = type_expr.find('[')?;
+    let close = type_expr.find(']')?;
+    if close <= open {
+        return None;
+    }
+    let dims_text = type_expr[open + 1..close].trim();
+    let base_text = type_expr[close + 1..].trim();
+    let of_pos = base_text.to_ascii_uppercase().find("OF")?;
+    let base_expr = base_text[of_pos + 2..].trim();
+    let base_xml = type_expression_to_plcopen_base_type_xml(base_expr)?;
+
+    let mut xml = String::from("<array>\n");
+    for dimension in dims_text.split(',') {
+        let (lower, upper) = dimension.split_once("..")?;
+        xml.push_str(&format!(
+            "  <dimension lower=\"{}\" upper=\"{}\"/>\n",
+            escape_xml_attr(lower.trim()),
+            escape_xml_attr(upper.trim())
+        ));
+    }
+    xml.push_str("  <baseType>\n");
+    for line in base_xml.lines() {
+        xml.push_str("    ");
+        xml.push_str(line);
+        xml.push('\n');
+    }
+    xml.push_str("  </baseType>\n");
+    xml.push_str("</array>");
+    Some(xml)
+}
+
+fn type_expr_struct_to_xml(type_expr: &str) -> Option<String> {
+    let upper = type_expr.to_ascii_uppercase();
+    let end_index = upper.rfind("END_STRUCT")?;
+    let body = type_expr.get("STRUCT".len()..end_index)?.trim();
+    let mut xml = String::from("<struct>\n");
+
+    for raw_line in body.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let line = line.trim_end_matches(';').trim();
+        let (name, rhs) = line.split_once(':')?;
+        let field_name = name.trim();
+        if field_name.is_empty() {
+            continue;
+        }
+        let (field_type, field_init) = match rhs.split_once(":=") {
+            Some((type_part, init_part)) => (type_part.trim(), Some(init_part.trim())),
+            None => (rhs.trim(), None),
+        };
+        let field_xml = type_expression_to_plcopen_base_type_xml(field_type)?;
+
+        xml.push_str(&format!(
+            "  <variable name=\"{}\">\n",
+            escape_xml_attr(field_name)
+        ));
+        xml.push_str("    <type>\n");
+        for line in field_xml.lines() {
+            xml.push_str("      ");
+            xml.push_str(line);
+            xml.push('\n');
+        }
+        xml.push_str("    </type>\n");
+        if let Some(initial_value) = field_init.filter(|value| !value.is_empty()) {
+            xml.push_str("    <initialValue>\n");
+            xml.push_str(&format!(
+                "      <simpleValue value=\"{}\"/>\n",
+                escape_xml_attr(initial_value)
+            ));
+            xml.push_str("    </initialValue>\n");
+        }
+        xml.push_str("  </variable>\n");
+    }
+
+    xml.push_str("</struct>");
+    Some(xml)
+}
+
+fn type_expr_enum_to_xml(type_expr: &str) -> Option<String> {
+    let inner = type_expr
+        .trim()
+        .strip_prefix('(')?
+        .strip_suffix(')')?
+        .trim();
+    if inner.is_empty() {
+        return None;
+    }
+
+    let mut xml = String::from("<enum>\n  <values>\n");
+    for item in inner.split(',') {
+        let value = item.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if let Some((name, raw)) = value.split_once(":=") {
+            xml.push_str(&format!(
+                "    <value name=\"{}\" value=\"{}\"/>\n",
+                escape_xml_attr(name.trim()),
+                escape_xml_attr(raw.trim())
+            ));
+        } else {
+            xml.push_str(&format!(
+                "    <value name=\"{}\"/>\n",
+                escape_xml_attr(value)
+            ));
+        }
+    }
+    xml.push_str("  </values>\n</enum>");
+    Some(xml)
+}
+
+fn type_expr_subrange_to_xml(type_expr: &str) -> Option<String> {
+    let open = type_expr.rfind('(')?;
+    let close = type_expr.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    let base_expr = type_expr[..open].trim();
+    let range = type_expr[open + 1..close].trim();
+    let (lower, upper) = range.split_once("..")?;
+    let base_xml = type_expression_to_plcopen_base_type_xml(base_expr)?;
+
+    let mut xml = String::from(&format!(
+        "<subrange lower=\"{}\" upper=\"{}\">\n",
+        escape_xml_attr(lower.trim()),
+        escape_xml_attr(upper.trim())
+    ));
+    xml.push_str("  <baseType>\n");
+    for line in base_xml.lines() {
+        xml.push_str("    ");
+        xml.push_str(line);
+        xml.push('\n');
+    }
+    xml.push_str("  </baseType>\n");
+    xml.push_str("</subrange>");
+    Some(xml)
+}
+
+fn type_expr_simple_to_xml(type_expr: &str) -> Option<String> {
+    let trimmed = type_expr.trim();
+    let upper = trimmed.to_ascii_uppercase();
+    if upper.starts_with("STRING[") && upper.ends_with(']') {
+        let length = trimmed[7..trimmed.len() - 1].trim();
+        return Some(format!("<string length=\"{}\"/>", escape_xml_attr(length)));
+    }
+    if upper.starts_with("WSTRING[") && upper.ends_with(']') {
+        let length = trimmed[8..trimmed.len() - 1].trim();
+        return Some(format!("<wstring length=\"{}\"/>", escape_xml_attr(length)));
+    }
+    if upper == "STRING" {
+        return Some("<string />".to_string());
+    }
+    if upper == "WSTRING" {
+        return Some("<wstring />".to_string());
+    }
+
+    if is_elementary_type_tag(&upper.to_ascii_lowercase()) {
+        return Some(format!("<{} />", upper.to_ascii_lowercase()));
+    }
+
+    if trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
+    {
+        return Some(format!("<derived name=\"{}\"/>", escape_xml_attr(trimmed)));
+    }
+    None
+}
+
 fn import_data_types_to_sources(
     root: roxmltree::Node<'_, '_>,
     sources_root: &Path,
@@ -1175,6 +1976,568 @@ fn import_data_types_to_sources(
         path.display()
     ));
     Ok(Some((path, imported_count)))
+}
+
+fn import_project_model_to_sources(
+    root: roxmltree::Node<'_, '_>,
+    sources_root: &Path,
+    seen_files: &mut HashSet<PathBuf>,
+    warnings: &mut Vec<String>,
+    unsupported_nodes: &mut Vec<String>,
+    unsupported_diagnostics: &mut Vec<PlcopenUnsupportedDiagnostic>,
+    loss_warnings: &mut usize,
+) -> anyhow::Result<ImportProjectModelStats> {
+    let mut stats = ImportProjectModelStats::default();
+    let mut configurations = Vec::new();
+
+    for instances in root
+        .children()
+        .filter(|child| is_element_named_ci(*child, "instances"))
+    {
+        let mut discovered = false;
+        for holder in instances
+            .children()
+            .filter(|child| is_element_named_ci(*child, "configurations"))
+        {
+            for configuration in holder
+                .children()
+                .filter(|child| is_element_named_ci(*child, "configuration"))
+            {
+                configurations.push(parse_configuration_model(configuration));
+                discovered = true;
+            }
+        }
+        if !discovered {
+            for configuration in instances
+                .children()
+                .filter(|child| is_element_named_ci(*child, "configuration"))
+            {
+                configurations.push(parse_configuration_model(configuration));
+                discovered = true;
+            }
+        }
+        if !discovered {
+            let direct_resources = instances
+                .children()
+                .filter(|child| is_element_named_ci(*child, "resource"))
+                .collect::<Vec<_>>();
+            if !direct_resources.is_empty() {
+                let mut synthetic = ConfigurationDecl {
+                    name: "ImportedConfiguration".to_string(),
+                    tasks: Vec::new(),
+                    programs: Vec::new(),
+                    resources: Vec::new(),
+                };
+                for resource in direct_resources {
+                    synthetic.resources.push(parse_resource_model(resource));
+                }
+                configurations.push(synthetic);
+                discovered = true;
+            }
+        }
+        if !discovered {
+            unsupported_nodes.push("instances".to_string());
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO501",
+                "warning",
+                "instances",
+                "PLCopen instances section is present but does not contain importable configuration/resource nodes",
+                None,
+                "Provide <configuration> entries under <instances>/<configurations> or direct <instances>",
+            ));
+            *loss_warnings += 1;
+        }
+    }
+
+    stats.discovered_configurations = configurations.len();
+    if configurations.is_empty() {
+        return Ok(stats);
+    }
+
+    let mut used_configuration_names = HashSet::new();
+    for (index, mut configuration) in configurations.into_iter().enumerate() {
+        let default_name = format!("ImportedConfiguration{}", index + 1);
+        let mut configuration_name = sanitize_st_identifier(&configuration.name, &default_name);
+        if configuration_name != configuration.name {
+            warnings.push(format!(
+                "normalized configuration name '{}' -> '{}'",
+                configuration.name, configuration_name
+            ));
+        }
+        configuration_name = unique_identifier(configuration_name, &mut used_configuration_names);
+        configuration.name = configuration_name;
+
+        normalize_configuration_model(
+            &mut configuration,
+            warnings,
+            unsupported_diagnostics,
+            loss_warnings,
+        );
+
+        let source_text = render_configuration_source(&configuration);
+        let path = unique_source_path(
+            sources_root,
+            &format!("plcopen_configuration_{}", configuration.name),
+            seen_files,
+        );
+        std::fs::write(&path, source_text).with_context(|| {
+            format!(
+                "failed to write imported configuration '{}'",
+                path.display()
+            )
+        })?;
+        stats.written_sources.push(path);
+        stats.imported_configurations += 1;
+        stats.imported_resources += configuration.resources.len();
+        stats.imported_tasks += configuration.tasks.len();
+        stats.imported_program_instances += configuration.programs.len();
+        for resource in &configuration.resources {
+            stats.imported_tasks += resource.tasks.len();
+            stats.imported_program_instances += resource.programs.len();
+        }
+    }
+
+    if stats.imported_configurations > 0 {
+        warnings.push(format!(
+            "imported {} PLCopen configuration(s), {} resource(s), {} task(s), {} program instance(s)",
+            stats.imported_configurations,
+            stats.imported_resources,
+            stats.imported_tasks,
+            stats.imported_program_instances
+        ));
+    }
+
+    Ok(stats)
+}
+
+fn parse_configuration_model(node: roxmltree::Node<'_, '_>) -> ConfigurationDecl {
+    let mut tasks = Vec::new();
+    let mut programs = Vec::new();
+    let mut resources = Vec::new();
+
+    for child in node.children().filter(|child| child.is_element()) {
+        if is_element_named_ci(child, "task") {
+            if let Some(task) = parse_task_model(child) {
+                tasks.push(task);
+            }
+        } else if let Some(program) = parse_program_instance_model(child, None) {
+            programs.push(program);
+        } else if is_element_named_ci(child, "resource") {
+            resources.push(parse_resource_model(child));
+        } else if is_element_named_ci(child, "resources") {
+            for resource in child
+                .children()
+                .filter(|entry| is_element_named_ci(*entry, "resource"))
+            {
+                resources.push(parse_resource_model(resource));
+            }
+        }
+    }
+
+    ConfigurationDecl {
+        name: attribute_ci_any(&node, &["name", "configurationName"])
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "ImportedConfiguration".to_string()),
+        tasks,
+        programs,
+        resources,
+    }
+}
+
+fn parse_resource_model(node: roxmltree::Node<'_, '_>) -> ResourceDecl {
+    let mut tasks = Vec::new();
+    let mut programs = Vec::new();
+
+    for child in node.children().filter(|child| child.is_element()) {
+        if is_element_named_ci(child, "task") {
+            if let Some(task) = parse_task_model(child) {
+                let task_name = task.name.clone();
+                tasks.push(task);
+                for nested in child.children().filter(|entry| entry.is_element()) {
+                    if let Some(program) = parse_program_instance_model(nested, Some(&task_name)) {
+                        programs.push(program);
+                    }
+                }
+            }
+        } else if let Some(program) = parse_program_instance_model(child, None) {
+            programs.push(program);
+        }
+    }
+
+    ResourceDecl {
+        name: attribute_ci_any(&node, &["name", "resourceName"])
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "ImportedResource".to_string()),
+        target: attribute_ci_any(&node, &["target", "type", "on"])
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "CPU".to_string()),
+        tasks,
+        programs,
+    }
+}
+
+fn parse_task_model(node: roxmltree::Node<'_, '_>) -> Option<TaskDecl> {
+    let name = attribute_ci_any(&node, &["name", "taskName"])
+        .or_else(|| {
+            node.children()
+                .find(|child| is_element_named_ci(*child, "name"))
+                .and_then(extract_text_content)
+        })?
+        .trim()
+        .to_string();
+    if name.is_empty() {
+        return None;
+    }
+
+    let interval = attribute_ci_any(&node, &["interval", "cycle", "cycleTime", "period"])
+        .or_else(|| {
+            node.children()
+                .find(|child| is_element_named_ci(*child, "interval"))
+                .and_then(|entry| {
+                    attribute_ci_any(&entry, &["value"]).or_else(|| extract_text_content(entry))
+                })
+        })
+        .map(|value| normalize_task_interval_literal(&value));
+
+    let single = attribute_ci_any(&node, &["single", "event", "trigger"]);
+    let priority = attribute_ci_any(&node, &["priority"]);
+
+    Some(TaskDecl {
+        name,
+        interval,
+        single,
+        priority,
+    })
+}
+
+fn parse_program_instance_model(
+    node: roxmltree::Node<'_, '_>,
+    inherited_task_name: Option<&str>,
+) -> Option<ProgramBindingDecl> {
+    let node_name = node.tag_name().name();
+    if !node_name.eq_ignore_ascii_case("program")
+        && !node_name.eq_ignore_ascii_case("pouInstance")
+        && !node_name.eq_ignore_ascii_case("programInstance")
+        && !node_name.eq_ignore_ascii_case("instance")
+    {
+        return None;
+    }
+
+    let instance_name = attribute_ci_any(&node, &["name", "instanceName", "programName"])
+        .or_else(|| {
+            node.children()
+                .find(|child| is_element_named_ci(*child, "name"))
+                .and_then(extract_text_content)
+        })?
+        .trim()
+        .to_string();
+    if instance_name.is_empty() {
+        return None;
+    }
+
+    let type_name = attribute_ci_any(&node, &["typeName", "type", "pouName", "programType"])
+        .or_else(|| {
+            node.children()
+                .find(|child| is_element_named_ci(*child, "type"))
+                .and_then(|entry| {
+                    attribute_ci_any(&entry, &["name"]).or_else(|| extract_text_content(entry))
+                })
+        })?
+        .trim()
+        .to_string();
+    if type_name.is_empty() {
+        return None;
+    }
+
+    let task_name = attribute_ci_any(&node, &["task", "taskName", "withTask"])
+        .or_else(|| inherited_task_name.map(ToOwned::to_owned))
+        .filter(|value| !value.trim().is_empty());
+
+    Some(ProgramBindingDecl {
+        instance_name,
+        task_name,
+        type_name,
+    })
+}
+
+fn normalize_configuration_model(
+    configuration: &mut ConfigurationDecl,
+    warnings: &mut Vec<String>,
+    unsupported_diagnostics: &mut Vec<PlcopenUnsupportedDiagnostic>,
+    loss_warnings: &mut usize,
+) {
+    let mut used_resource_names = HashSet::new();
+    let mut used_task_names = HashSet::new();
+    let mut used_program_names = HashSet::new();
+
+    configuration.name = sanitize_st_identifier(&configuration.name, "ImportedConfiguration");
+    for task in &mut configuration.tasks {
+        let original = task.name.clone();
+        let mut normalized = sanitize_st_identifier(&task.name, "Task");
+        normalized = unique_identifier(normalized, &mut used_task_names);
+        if normalized != original {
+            warnings.push(format!(
+                "normalized task name '{}' -> '{}' in configuration '{}'",
+                original, normalized, configuration.name
+            ));
+        }
+        task.name = normalized;
+    }
+    for program in &mut configuration.programs {
+        let original = program.instance_name.clone();
+        let mut normalized = sanitize_st_identifier(&program.instance_name, "Program");
+        normalized = unique_identifier(normalized, &mut used_program_names);
+        if normalized != original {
+            warnings.push(format!(
+                "normalized program instance name '{}' -> '{}' in configuration '{}'",
+                original, normalized, configuration.name
+            ));
+        }
+        program.instance_name = normalized;
+        program.type_name = sanitize_st_identifier(&program.type_name, "MainProgram");
+        if let Some(task_name) = &program.task_name {
+            let normalized_task = sanitize_st_identifier(task_name, "Task");
+            if used_task_names.contains(&normalized_task.to_ascii_lowercase()) {
+                program.task_name = Some(normalized_task);
+            } else if let Some(first) = configuration.tasks.first() {
+                program.task_name = Some(first.name.clone());
+            }
+        }
+    }
+
+    for resource in &mut configuration.resources {
+        let original = resource.name.clone();
+        let mut normalized = sanitize_st_identifier(&resource.name, "Resource");
+        normalized = unique_identifier(normalized, &mut used_resource_names);
+        if normalized != original {
+            warnings.push(format!(
+                "normalized resource name '{}' -> '{}' in configuration '{}'",
+                original, normalized, configuration.name
+            ));
+        }
+        resource.name = normalized;
+        resource.target = sanitize_st_identifier(&resource.target, "CPU");
+
+        let mut local_task_names = HashSet::new();
+        let mut local_program_names = HashSet::new();
+        for task in &mut resource.tasks {
+            let original = task.name.clone();
+            let mut task_name = sanitize_st_identifier(&task.name, "Task");
+            task_name = unique_identifier(task_name, &mut local_task_names);
+            if task_name != original {
+                warnings.push(format!(
+                    "normalized task name '{}' -> '{}' in resource '{}'",
+                    original, task_name, resource.name
+                ));
+            }
+            task.name = task_name;
+        }
+        for program in &mut resource.programs {
+            let original = program.instance_name.clone();
+            let mut program_name = sanitize_st_identifier(&program.instance_name, "Program");
+            program_name = unique_identifier(program_name, &mut local_program_names);
+            if program_name != original {
+                warnings.push(format!(
+                    "normalized program instance name '{}' -> '{}' in resource '{}'",
+                    original, program_name, resource.name
+                ));
+            }
+            program.instance_name = program_name;
+            program.type_name = sanitize_st_identifier(&program.type_name, "MainProgram");
+            if let Some(task_name) = &program.task_name {
+                let task_name = sanitize_st_identifier(task_name, "Task");
+                program.task_name = Some(task_name);
+            }
+        }
+
+        if !resource.programs.is_empty() && resource.tasks.is_empty() {
+            let auto_task_name = unique_identifier("AutoTask".to_string(), &mut local_task_names);
+            resource.tasks.push(TaskDecl {
+                name: auto_task_name.clone(),
+                interval: Some("T#100ms".to_string()),
+                single: None,
+                priority: Some("1".to_string()),
+            });
+            for program in &mut resource.programs {
+                if program.task_name.is_none() {
+                    program.task_name = Some(auto_task_name.clone());
+                }
+            }
+            warnings.push(format!(
+                "resource '{}' had PROGRAM instances without TASK declarations; generated TASK '{}'",
+                resource.name, auto_task_name
+            ));
+            unsupported_diagnostics.push(unsupported_diagnostic(
+                "PLCO506",
+                "info",
+                format!("instances/resource/{}", resource.name),
+                "Generated deterministic fallback TASK for resource PROGRAM bindings",
+                None,
+                "Review generated configuration task timing and priority",
+            ));
+        }
+    }
+
+    if !configuration.programs.is_empty()
+        && configuration.tasks.is_empty()
+        && configuration.resources.is_empty()
+    {
+        let auto_task_name = unique_identifier("AutoTask".to_string(), &mut used_task_names);
+        configuration.tasks.push(TaskDecl {
+            name: auto_task_name.clone(),
+            interval: Some("T#100ms".to_string()),
+            single: None,
+            priority: Some("1".to_string()),
+        });
+        for program in &mut configuration.programs {
+            if program.task_name.is_none() {
+                program.task_name = Some(auto_task_name.clone());
+            }
+        }
+        warnings.push(format!(
+            "configuration '{}' had PROGRAM instances without TASK declarations; generated TASK '{}'",
+            configuration.name, auto_task_name
+        ));
+        unsupported_diagnostics.push(unsupported_diagnostic(
+            "PLCO507",
+            "info",
+            format!("instances/configuration/{}", configuration.name),
+            "Generated deterministic fallback TASK for configuration-level PROGRAM bindings",
+            None,
+            "Review generated configuration task timing and priority",
+        ));
+    }
+
+    if configuration.tasks.is_empty()
+        && configuration.programs.is_empty()
+        && configuration.resources.is_empty()
+    {
+        *loss_warnings += 1;
+        unsupported_diagnostics.push(unsupported_diagnostic(
+            "PLCO508",
+            "warning",
+            format!("instances/configuration/{}", configuration.name),
+            "Configuration is empty after import normalization",
+            None,
+            "Add TASK/PROGRAM/RESOURCE entries to preserve runtime scheduling intent",
+        ));
+    }
+}
+
+fn render_configuration_source(configuration: &ConfigurationDecl) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("CONFIGURATION {}\n", configuration.name));
+    for task in &configuration.tasks {
+        out.push_str(&format!("{}\n", format_task_declaration(task)));
+    }
+    for program in &configuration.programs {
+        out.push_str(&format!("{}\n", format_program_binding(program)));
+    }
+    for resource in &configuration.resources {
+        out.push_str(&format!(
+            "RESOURCE {} ON {}\n",
+            resource.name, resource.target
+        ));
+        for task in &resource.tasks {
+            out.push_str("    ");
+            out.push_str(&format_task_declaration(task));
+            out.push('\n');
+        }
+        for program in &resource.programs {
+            out.push_str("    ");
+            out.push_str(&format_program_binding(program));
+            out.push('\n');
+        }
+        out.push_str("END_RESOURCE\n");
+    }
+    out.push_str("END_CONFIGURATION\n");
+    out
+}
+
+fn format_task_declaration(task: &TaskDecl) -> String {
+    let mut elements = Vec::new();
+    if let Some(single) = task
+        .single
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        elements.push(format!("SINGLE := {}", single.trim()));
+    }
+    if let Some(interval) = task
+        .interval
+        .as_ref()
+        .map(|value| normalize_task_interval_literal(value))
+    {
+        elements.push(format!("INTERVAL := {}", interval.trim()));
+    } else if task.single.is_none() {
+        elements.push("INTERVAL := T#100ms".to_string());
+    }
+    if let Some(priority) = task
+        .priority
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        elements.push(format!("PRIORITY := {}", priority.trim()));
+    } else {
+        elements.push("PRIORITY := 1".to_string());
+    }
+    format!("TASK {} ({});", task.name, elements.join(", "))
+}
+
+fn format_program_binding(program: &ProgramBindingDecl) -> String {
+    if let Some(task_name) = &program.task_name {
+        format!(
+            "PROGRAM {} WITH {} : {};",
+            program.instance_name, task_name, program.type_name
+        )
+    } else {
+        format!("PROGRAM {} : {};", program.instance_name, program.type_name)
+    }
+}
+
+fn sanitize_st_identifier(raw: &str, fallback: &str) -> String {
+    let mut out = String::new();
+    for (index, ch) in raw.chars().enumerate() {
+        let valid = if index == 0 {
+            ch.is_ascii_alphabetic() || ch == '_'
+        } else {
+            ch.is_ascii_alphanumeric() || ch == '_'
+        };
+        if valid {
+            out.push(ch);
+        } else if ch.is_ascii_alphanumeric() {
+            if index == 0 {
+                out.push('_');
+                out.push(ch);
+            } else {
+                out.push(ch);
+            }
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        return fallback.to_string();
+    }
+    if out.chars().next().is_some_and(|ch| ch.is_ascii_digit()) {
+        out.insert(0, '_');
+    }
+    out
+}
+
+fn unique_identifier(candidate: String, used_lowercase: &mut HashSet<String>) -> String {
+    let base = candidate;
+    let mut output = base.clone();
+    let mut index = 2usize;
+    while !used_lowercase.insert(output.to_ascii_lowercase()) {
+        output = format!("{base}_{index}");
+        index += 1;
+    }
+    output
+}
+
+fn attribute_ci_any(node: &roxmltree::Node<'_, '_>, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| attribute_ci(*node, name))
 }
 
 fn format_data_type_declaration(name: &str, type_expr: &str) -> String {
@@ -1718,7 +3081,7 @@ fn inspect_unsupported_structure(
         let name = child.tag_name().name();
         if !matches!(
             name.to_ascii_lowercase().as_str(),
-            "fileheader" | "contentheader" | "types" | "adddata"
+            "fileheader" | "contentheader" | "types" | "instances" | "adddata"
         ) {
             unsupported_nodes.push(name.to_string());
             warnings.push(format!(
@@ -1742,7 +3105,7 @@ fn inspect_unsupported_structure(
                 {
                     unsupported_nodes.push(format!("types/{}", type_name));
                     warnings.push(format!(
-                        "unsupported PLCopen node '<types>/<{}>' skipped (strict subset)",
+                        "unsupported PLCopen node '<types>/<{}>' skipped (ST-complete subset)",
                         type_name
                     ));
                     unsupported_diagnostics.push(unsupported_diagnostic(
@@ -1751,7 +3114,29 @@ fn inspect_unsupported_structure(
                         format!("types/{type_name}"),
                         format!("Unsupported PLCopen <types>/<{}> section", type_name),
                         None,
-                        "Skipped in strict subset; migrate supported POUs manually",
+                        "Skipped in ST-complete subset; migrate supported ST declarations manually",
+                    ));
+                }
+            }
+        } else if name.eq_ignore_ascii_case("instances") {
+            for instances_child in child.children().filter(|entry| entry.is_element()) {
+                let instances_name = instances_child.tag_name().name();
+                if !instances_name.eq_ignore_ascii_case("configurations")
+                    && !instances_name.eq_ignore_ascii_case("configuration")
+                    && !instances_name.eq_ignore_ascii_case("resource")
+                {
+                    unsupported_nodes.push(format!("instances/{instances_name}"));
+                    warnings.push(format!(
+                        "unsupported PLCopen node '<instances>/<{}>' skipped",
+                        instances_name
+                    ));
+                    unsupported_diagnostics.push(unsupported_diagnostic(
+                        "PLCO103",
+                        "warning",
+                        format!("instances/{instances_name}"),
+                        format!("Unsupported PLCopen <instances>/<{}> section", instances_name),
+                        None,
+                        "Skipped in ST-complete subset; provide configurations/resources/tasks/program instances",
                     ));
                 }
             }

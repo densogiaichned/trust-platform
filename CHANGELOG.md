@@ -55,7 +55,17 @@ Target release: `v0.7.3`
 
 ### Changed
 
-- Deliverable 5 kickoff: `trust-runtime plcopen import` now imports supported PLCopen `types/dataTypes` baseType forms (`elementary`, `derived`, `array`, `struct`, `enum`, `subrange`) into generated ST `TYPE` declarations under `sources/`, while reporting unsupported definitions with structured diagnostics.
+- PLCopen XML Full ST Project Coverage (Deliverable 5):
+  - Profile advanced to `trust-st-complete-v1`.
+  - `trust-runtime plcopen import` now supports full ST-project model import for:
+    - `types/dataTypes` (`elementary`, `derived`, `array`, `struct`, `enum`, `subrange`)
+    - `instances/configurations/resources/tasks/program instances`
+  - `trust-runtime plcopen export` now emits supported ST `TYPE` declarations and configuration/resource/task/program-instance model back into PLCopen XML.
+  - Import/export JSON contracts now include deterministic ST-project coverage counters:
+    - `data_type_count`, `configuration_count`, `resource_count`, `task_count`, `program_instance_count` (export)
+    - `imported_data_types`, `discovered_configurations`, `imported_configurations`, `imported_resources`, `imported_tasks`, `imported_program_instances` (import/migration)
+  - Added CODESYS ST-complete fixture packs (`small`/`medium`/`large`) with deterministic expected migration artifacts and CI schema-drift parity gate in `crates/trust-runtime/tests/plcopen_st_complete_parity.rs`.
+  - Updated PLCopen compatibility/spec docs and added end-to-end import/export example project in `examples/plcopen_xml_st_complete/`.
 - `trust-runtime plcopen export` and `trust-runtime plcopen import` now support `--json` for machine-readable report output.
 - `trust-runtime plcopen profile` now publishes a compatibility matrix plus round-trip limits/known-gaps contract fields.
 - `trust-runtime plcopen import` compatibility scoring now accounts for shimmed vendor-library aliases as partial-coverage items.

@@ -21,7 +21,7 @@ pub fn run_plcopen(action: PlcopenAction) -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&profile)?);
                 return Ok(());
             }
-            println!("{}", style::accent("PLCopen profile (strict subset)"));
+            println!("{}", style::accent("PLCopen profile (ST-complete subset)"));
             println!("Namespace: {}", profile.namespace);
             println!("Profile: {}", profile.profile);
             println!("Version: {}", profile.version);
@@ -107,8 +107,14 @@ fn print_export_report(report: &PlcopenExportReport) {
         style::success(format!("Wrote {}", report.output_path.display()))
     );
     println!(
-        "Exported {} POU(s) from {} source file(s)",
-        report.pou_count, report.source_count
+        "Exported {} POU(s), {} data type(s), {} configuration(s), {} resource(s), {} task(s), {} program instance(s) from {} source file(s)",
+        report.pou_count,
+        report.data_type_count,
+        report.configuration_count,
+        report.resource_count,
+        report.task_count,
+        report.program_instance_count,
+        report.source_count
     );
     println!("Source map: {}", report.source_map_path.display());
     if !report.warnings.is_empty() {
@@ -134,6 +140,14 @@ fn print_import_report(report: &PlcopenImportReport) {
     println!(
         "Discovered {} POU(s), source coverage {:.2}%, semantic loss {:.2}%",
         report.discovered_pous, report.source_coverage_percent, report.semantic_loss_percent
+    );
+    println!(
+        "Imported {} data type(s), {} configuration(s), {} resource(s), {} task(s), {} program instance(s)",
+        report.imported_data_types,
+        report.imported_configurations,
+        report.imported_resources,
+        report.imported_tasks,
+        report.imported_program_instances
     );
     println!("Detected ecosystem: {}", report.detected_ecosystem);
     println!(

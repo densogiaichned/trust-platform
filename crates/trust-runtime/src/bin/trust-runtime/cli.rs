@@ -160,7 +160,7 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = DocsFormat::Both)]
         format: DocsFormat,
     },
-    /// PLCopen XML interchange (strict subset profile).
+    /// PLCopen XML interchange (ST-complete profile).
     Plcopen {
         #[command(subcommand)]
         action: PlcopenAction,
@@ -308,7 +308,7 @@ pub enum SetupAccessArg {
 
 #[derive(Debug, Subcommand)]
 pub enum PlcopenAction {
-    /// Print supported PLCopen profile and strict subset contract.
+    /// Print supported PLCopen profile and ST-complete contract.
     Profile {
         /// Print machine-readable JSON.
         #[arg(long, action = ArgAction::SetTrue)]
