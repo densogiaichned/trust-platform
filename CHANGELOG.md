@@ -6,7 +6,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.7.2`
+Target release: `v0.7.3`
 
 ### Added
 
@@ -79,6 +79,8 @@ Target release: `v0.7.2`
 - GitHub license detection no longer reports an extra `Unknown` license entry after removing the non-standard root `LICENSE` stub (dual-license files remain `LICENSE-MIT` and `LICENSE-APACHE`).
 - Release packaging metadata:
   - VS Code extension package versions are now aligned to the workspace release version to avoid duplicate publish artifacts from prior extension versions.
+- Release workflow hardening:
+  - VS Code Marketplace publish now runs per-VSIX with retry/backoff on transient network timeouts and treats already-published artifacts as idempotent success for reruns.
 - VS Code Marketplace screenshots now use absolute image URLs from GitHub raw content so images render reliably in extension listing pages.
 - `%MW` memory marker force/write synchronization in runtime I/O panel flow.
 - Debug adapter force latch behavior and state-lock interaction.
