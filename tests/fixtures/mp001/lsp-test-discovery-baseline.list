@@ -47,6 +47,7 @@ handlers::tests::core::lsp_rename_namespace_path_updates_using_and_qualified_nam
 handlers::tests::core::lsp_rename_primary_pou_renames_file: test
 handlers::tests::core::lsp_rename_variable: test
 handlers::tests::core::lsp_semantic_tokens_delta: test
+handlers::tests::core::lsp_siemens_hash_prefixed_example_has_no_unexpected_diagnostics: test
 handlers::tests::core::lsp_supports_virtual_document_uris: test
 handlers::tests::core::lsp_tutorial_examples_no_unexpected_diagnostics_snapshot: test
 handlers::tests::core::lsp_will_rename_files_updates_pou_name: test
@@ -63,6 +64,7 @@ handlers::tests::formatting_and_navigation::lsp_document_link_config_paths: test
 handlers::tests::formatting_and_navigation::lsp_document_link_using_directive: test
 handlers::tests::formatting_and_navigation::lsp_formatting_accepts_snake_case_client_keys: test
 handlers::tests::formatting_and_navigation::lsp_formatting_prefers_camel_case_when_both_aliases_present: test
+handlers::tests::formatting_and_navigation::lsp_formatting_siemens_profile_preserves_hash_prefixed_references: test
 handlers::tests::formatting_and_navigation::lsp_formatting_snapshot: test
 handlers::tests::formatting_and_navigation::lsp_formatting_vendor_profile_applies_keyword_case: test
 handlers::tests::formatting_and_navigation::lsp_on_type_formatting_formats_line: test
