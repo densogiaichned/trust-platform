@@ -3,7 +3,6 @@
 #![allow(missing_docs)]
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration as StdDuration, Instant};
 
 #[cfg(all(feature = "ethercat-wire", unix))]
@@ -14,7 +13,9 @@ use ethercrab::{
 };
 use serde::Deserialize;
 use smol_str::SmolStr;
-#[cfg(feature = "ethercat-wire")]
+#[cfg(all(feature = "ethercat-wire", unix))]
+use std::sync::{Arc, Mutex};
+#[cfg(all(feature = "ethercat-wire", unix))]
 use tokio::runtime::Runtime as TokioRuntime;
 
 use crate::error::RuntimeError;

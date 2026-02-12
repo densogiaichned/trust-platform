@@ -43,6 +43,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Guard Windows path hygiene in tests
         run: ./scripts/check_test_path_hygiene.sh
+      - name: Install Windows cross-compiler for runtime warning gate
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+      - name: Guard trust-runtime cross-target warnings
+        run: ./scripts/check_runtime_cross_target_warnings.sh --install-missing --require-cross
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Mark gate success
         if: ${{ success() }}

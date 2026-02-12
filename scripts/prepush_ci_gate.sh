@@ -45,7 +45,7 @@ run_step "01" "Path hygiene guard" ./scripts/check_test_path_hygiene.sh
 run_step "02" "Rust fmt check" cargo fmt --all --check
 run_step "03" "Clippy deny warnings (trust-hir + trust-lsp)" cargo clippy -p trust-hir -p trust-lsp -- -D warnings
 run_step "04" "trust-lsp unit/integration tests" cargo test -p trust-lsp --bin trust-lsp
-run_step "05" "trust-runtime warnings denied check" env RUSTFLAGS=-Dwarnings cargo check -p trust-runtime --all-targets
+run_step "05" "trust-runtime cross-target warning gate" ./scripts/check_runtime_cross_target_warnings.sh
 run_step "06" "trust-runtime mesh TLS stability gate" ./scripts/runtime_mesh_tls_stability_gate.sh --iterations 8
 
 if [[ "${DRY_RUN}" -eq 0 ]] && ! rustup target list --installed | grep -q '^x86_64-pc-windows-gnu$'; then
