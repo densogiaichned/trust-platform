@@ -58,6 +58,9 @@ PLCopen XML interchange (strict ST subset profile):
 trust-runtime plcopen profile
 trust-runtime plcopen export --project <project-folder> --output <project-folder>/interop/plcopen.xml
 trust-runtime plcopen export --project <project-folder> --output <project-folder>/interop/plcopen.xml --json
+trust-runtime plcopen export --project <project-folder> --target ab --json
+trust-runtime plcopen export --project <project-folder> --target siemens --json
+trust-runtime plcopen export --project <project-folder> --target schneider --json
 trust-runtime plcopen import --input <plcopen.xml> --project <target-project-folder>
 trust-runtime plcopen import --input <plcopen.xml> --project <target-project-folder> --json
 ```
@@ -74,6 +77,10 @@ per-POU skip reasons.
 For compatibility matrix, round-trip limits, and known gaps, see:
 
 `docs/guides/PLCOPEN_INTEROP_COMPATIBILITY.md`
+
+For multi-vendor export adapter manual steps/limitations, see:
+
+`docs/guides/PLCOPEN_EXPORT_ADAPTERS_V1.md`
 
 Start runtime:
 ```

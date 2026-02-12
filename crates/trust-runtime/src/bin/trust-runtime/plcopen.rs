@@ -6,11 +6,11 @@ use anyhow::Context;
 
 use trust_runtime::bundle::detect_bundle_path;
 use trust_runtime::plcopen::{
-    export_project_to_xml, import_xml_to_project, supported_profile, PlcopenExportReport,
-    PlcopenImportReport,
+    export_project_to_xml_with_target, import_xml_to_project, supported_profile,
+    PlcopenExportReport, PlcopenExportTarget, PlcopenImportReport,
 };
 
-use crate::cli::PlcopenAction;
+use crate::cli::{PlcopenAction, PlcopenExportTargetArg};
 use crate::style;
 
 pub fn run_plcopen(action: PlcopenAction) -> anyhow::Result<()> {
@@ -55,8 +55,9 @@ pub fn run_plcopen(action: PlcopenAction) -> anyhow::Result<()> {
         PlcopenAction::Export {
             project,
             output,
+            target,
             json,
-        } => run_export(project, output, json),
+        } => run_export(project, output, target, json),
         PlcopenAction::Import {
             input,
             project,
@@ -65,10 +66,16 @@ pub fn run_plcopen(action: PlcopenAction) -> anyhow::Result<()> {
     }
 }
 
-fn run_export(project: Option<PathBuf>, output: Option<PathBuf>, json: bool) -> anyhow::Result<()> {
+fn run_export(
+    project: Option<PathBuf>,
+    output: Option<PathBuf>,
+    target: PlcopenExportTargetArg,
+    json: bool,
+) -> anyhow::Result<()> {
     let project_root = resolve_project(project)?;
-    let output_path = output.unwrap_or_else(|| project_root.join("interop").join("plcopen.xml"));
-    let report = export_project_to_xml(&project_root, &output_path)?;
+    let target = to_export_target(target);
+    let output_path = output.unwrap_or_else(|| default_export_output_path(&project_root, target));
+    let report = export_project_to_xml_with_target(&project_root, &output_path, target)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else {
@@ -101,11 +108,33 @@ fn resolve_project(project: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     }
 }
 
+fn to_export_target(target: PlcopenExportTargetArg) -> PlcopenExportTarget {
+    match target {
+        PlcopenExportTargetArg::Generic => PlcopenExportTarget::Generic,
+        PlcopenExportTargetArg::Ab => PlcopenExportTarget::AllenBradley,
+        PlcopenExportTargetArg::Siemens => PlcopenExportTarget::Siemens,
+        PlcopenExportTargetArg::Schneider => PlcopenExportTarget::Schneider,
+    }
+}
+
+fn default_export_output_path(
+    project_root: &std::path::Path,
+    target: PlcopenExportTarget,
+) -> PathBuf {
+    let file_name = if target == PlcopenExportTarget::Generic {
+        "plcopen.xml".to_string()
+    } else {
+        format!("plcopen.{}.xml", target.file_suffix())
+    };
+    project_root.join("interop").join(file_name)
+}
+
 fn print_export_report(report: &PlcopenExportReport) {
     println!(
         "{}",
         style::success(format!("Wrote {}", report.output_path.display()))
     );
+    println!("Target adapter: {}", report.target);
     println!(
         "Exported {} POU(s), {} data type(s), {} configuration(s), {} resource(s), {} task(s), {} program instance(s) from {} source file(s)",
         report.pou_count,
@@ -117,6 +146,33 @@ fn print_export_report(report: &PlcopenExportReport) {
         report.source_count
     );
     println!("Source map: {}", report.source_map_path.display());
+    if let Some(adapter_report_path) = &report.adapter_report_path {
+        println!("Adapter report: {}", adapter_report_path.display());
+    }
+    if !report.adapter_diagnostics.is_empty() {
+        println!("Target diagnostics:");
+        for diagnostic in report.adapter_diagnostics.iter().take(10) {
+            println!(
+                " - {} {}: {} ({})",
+                diagnostic.severity, diagnostic.code, diagnostic.message, diagnostic.action
+            );
+        }
+        if report.adapter_diagnostics.len() > 10 {
+            println!(" - ... +{}", report.adapter_diagnostics.len() - 10);
+        }
+    }
+    if !report.adapter_manual_steps.is_empty() {
+        println!("Manual steps:");
+        for step in &report.adapter_manual_steps {
+            println!(" - {step}");
+        }
+    }
+    if !report.adapter_limitations.is_empty() {
+        println!("Adapter limitations:");
+        for limitation in &report.adapter_limitations {
+            println!(" - {limitation}");
+        }
+    }
     if !report.warnings.is_empty() {
         println!(
             "{}",

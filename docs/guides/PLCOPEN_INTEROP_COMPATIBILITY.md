@@ -1,7 +1,8 @@
 # PLCopen Interop Compatibility (Deliverable 5)
 
 This document defines the current PLCopen XML interoperability contract for
-`trust-runtime plcopen` after Deliverable 5 (ST-complete project coverage).
+`trust-runtime plcopen` after Deliverable 7 (ST-complete coverage + v1
+multi-vendor export adapters).
 
 ## Scope
 
@@ -9,7 +10,7 @@ This document defines the current PLCopen XML interoperability contract for
 - Profile: `trust-st-complete-v1`
 - Command surface:
   - `trust-runtime plcopen profile [--json]`
-  - `trust-runtime plcopen export [--project <dir>] [--output <file>] [--json]`
+  - `trust-runtime plcopen export [--project <dir>] [--output <file>] [--target <generic|ab|siemens|schneider>] [--json]`
   - `trust-runtime plcopen import --input <file> [--project <dir>] [--json]`
 - Product decision for this phase:
   - ST-only PLCopen project support.
@@ -27,8 +28,36 @@ This document defines the current PLCopen XML interoperability contract for
 | Vendor extension preservation (`addData`) | partial | Preserved/re-injectable, but not semantically interpreted. |
 | Vendor ecosystem migration heuristics | partial | Advisory signal only; not semantic equivalence. |
 | Vendor library shim normalization | partial | Selected aliases are mapped to IEC FB names during import; each mapping is reported. |
+| Multi-vendor export adapters (`--target ab|siemens|schneider`) | partial | Exports PLCopen XML + target diagnostics/manual-step report; native vendor project package generation is out of scope in v1. |
 | Graphical bodies (FBD/LD/SFC) | unsupported | ST-complete contract remains ST-only by product decision. |
 | Vendor AOI/library internal semantics | unsupported | Advanced behavior remains manual migration work beyond symbol-level shims. |
+
+## Export Adapter Contract (Deliverable 7)
+
+When `plcopen export` runs with `--target ab|siemens|schneider`, the export report
+includes target-specific adapter fields:
+
+- `target`
+- `adapter_report_path`
+- `adapter_diagnostics[]`:
+  - `code`
+  - `severity`
+  - `message`
+  - `action`
+- `adapter_manual_steps[]`
+- `adapter_limitations[]`
+
+The command also writes:
+
+- target-specific default XML path:
+  - `interop/plcopen.ab.xml`
+  - `interop/plcopen.siemens.xml`
+  - `interop/plcopen.schneider.xml`
+- sidecar adapter report:
+  - `<output-file>.adapter-report.json`
+
+Adapter diagnostics are migration guidance only; they are not proof of semantic
+equivalence on target runtimes.
 
 ## Migration Report Contract
 
@@ -122,6 +151,7 @@ Not guaranteed:
 - Vendor library shim coverage is intentionally limited to the baseline alias catalog.
 - No semantic translation for vendor-specific AOI/FB internals and pragmas.
 - Vendor extension nodes are preserved as opaque metadata, not executed.
+- Export adapters do not generate native vendor package formats (`.L5X`, TIA project archives, EcoStruxure project archives).
 
 ## Example Project
 

@@ -15,6 +15,7 @@ const PLCOPEN_NAMESPACE: &str = "http://www.plcopen.org/xml/tc6_0200";
 const PROFILE_NAME: &str = "trust-st-complete-v1";
 const SOURCE_MAP_DATA_NAME: &str = "trust.sourceMap";
 const VENDOR_EXT_DATA_NAME: &str = "trust.vendorExtensions";
+const EXPORT_ADAPTER_DATA_NAME: &str = "trust.exportAdapter";
 const VENDOR_EXTENSION_HOOK_FILE: &str = "plcopen.vendor-extensions.xml";
 const IMPORTED_VENDOR_EXTENSION_FILE: &str = "plcopen.vendor-extensions.imported.xml";
 const MIGRATION_REPORT_FILE: &str = "interop/plcopen-migration-report.json";
@@ -87,8 +88,13 @@ pub struct PlcopenProfile {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PlcopenExportReport {
+    pub target: String,
     pub output_path: PathBuf,
     pub source_map_path: PathBuf,
+    pub adapter_report_path: Option<PathBuf>,
+    pub adapter_diagnostics: Vec<PlcopenExportAdapterDiagnostic>,
+    pub adapter_manual_steps: Vec<String>,
+    pub adapter_limitations: Vec<String>,
     pub pou_count: usize,
     pub data_type_count: usize,
     pub configuration_count: usize,
@@ -195,6 +201,63 @@ pub struct PlcopenLibraryShimApplication {
     pub notes: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum PlcopenExportTarget {
+    Generic,
+    AllenBradley,
+    Siemens,
+    Schneider,
+}
+
+impl PlcopenExportTarget {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Generic => "generic-plcopen",
+            Self::AllenBradley => "allen-bradley",
+            Self::Siemens => "siemens-tia",
+            Self::Schneider => "schneider-ecostruxure",
+        }
+    }
+
+    pub fn file_suffix(self) -> &'static str {
+        match self {
+            Self::Generic => "generic",
+            Self::AllenBradley => "ab",
+            Self::Siemens => "siemens",
+            Self::Schneider => "schneider",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Generic => "Generic PLCopen XML",
+            Self::AllenBradley => "Allen-Bradley / Studio 5000",
+            Self::Siemens => "Siemens TIA Portal",
+            Self::Schneider => "Schneider EcoStruxure",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlcopenExportAdapterDiagnostic {
+    pub code: String,
+    pub severity: String,
+    pub message: String,
+    pub action: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlcopenExportAdapterReport {
+    pub target: String,
+    pub target_label: String,
+    pub source_xml: PathBuf,
+    pub source_map_path: PathBuf,
+    pub diagnostics: Vec<PlcopenExportAdapterDiagnostic>,
+    pub manual_steps: Vec<String>,
+    pub limitations: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct VendorLibraryShim {
     source_symbol: &'static str,
@@ -266,6 +329,34 @@ struct ImportProjectModelStats {
     written_sources: Vec<PathBuf>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct ExportSourceAnalysis {
+    has_retain_keyword: bool,
+    has_direct_address_markers: bool,
+    has_siemens_aliases: bool,
+    has_rockwell_aliases: bool,
+    has_schneider_aliases: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ExportTargetValidationContext {
+    pou_count: usize,
+    data_type_count: usize,
+    configuration_count: usize,
+    resource_count: usize,
+    task_count: usize,
+    program_instance_count: usize,
+    source_count: usize,
+    analysis: ExportSourceAnalysis,
+}
+
+#[derive(Debug, Clone)]
+struct PlcopenExportAdapterContract {
+    diagnostics: Vec<PlcopenExportAdapterDiagnostic>,
+    manual_steps: Vec<String>,
+    limitations: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum PlcopenPouType {
     Program,
@@ -323,7 +414,7 @@ pub fn supported_profile() -> PlcopenProfile {
             "types/dataTypes/dataType[baseType subset: elementary|derived|array|struct|enum|subrange] (import/export)",
             "instances/configurations/resources/tasks/program instances",
             "pou/body/ST plain-text bodies",
-            "addData/data[name=trust.sourceMap|trust.vendorExtensions]",
+            "addData/data[name=trust.sourceMap|trust.vendorExtensions|trust.exportAdapter]",
         ],
         unsupported_nodes: vec![
             "graphical bodies (FBD/LD/SFC)",
@@ -372,6 +463,11 @@ pub fn supported_profile() -> PlcopenProfile {
                 notes: "Import can normalize selected Siemens/Rockwell/Schneider/Mitsubishi aliases to IEC FB names and reports each shim application.",
             },
             PlcopenCompatibilityMatrixEntry {
+                capability: "Export adapters v1 (Allen-Bradley/Siemens/Schneider)",
+                status: "partial",
+                notes: "Export emits target-specific adapter diagnostics/manual-step reports, but native vendor project packages remain out of scope.",
+            },
+            PlcopenCompatibilityMatrixEntry {
                 capability: "Graphical bodies (FBD/LD/SFC) and advanced runtime deployment resources",
                 status: "unsupported",
                 notes: "ST-complete subset remains ST-only and does not import graphical networks or advanced deployment metadata semantics.",
@@ -399,6 +495,7 @@ pub fn supported_profile() -> PlcopenProfile {
             "Vendor library shim coverage is limited to the published baseline alias catalog.",
             "No semantic translation for vendor-specific AOI/FB internal behavior beyond simple symbol remapping.",
             "No guaranteed equivalence for vendor pragmas, safety metadata, or online deployment tags.",
+            "Export adapters do not generate native vendor project archives (.L5X/.apxx/.project).",
         ],
     }
 }
@@ -406,6 +503,14 @@ pub fn supported_profile() -> PlcopenProfile {
 pub fn export_project_to_xml(
     project_root: &Path,
     output_path: &Path,
+) -> anyhow::Result<PlcopenExportReport> {
+    export_project_to_xml_with_target(project_root, output_path, PlcopenExportTarget::Generic)
+}
+
+pub fn export_project_to_xml_with_target(
+    project_root: &Path,
+    output_path: &Path,
+    target: PlcopenExportTarget,
 ) -> anyhow::Result<PlcopenExportReport> {
     let sources_root = project_root.join("sources");
     if !sources_root.is_dir() {
@@ -419,6 +524,7 @@ pub fn export_project_to_xml(
     if sources.is_empty() {
         anyhow::bail!("no ST sources found under {}", sources_root.display());
     }
+    let source_analysis = analyze_export_sources(&sources);
 
     let mut warnings = Vec::new();
     let mut declarations = Vec::new();
@@ -642,12 +748,51 @@ pub fn export_project_to_xml(
         xml.push_str("  </instances>\n");
     }
 
+    let validation_context = ExportTargetValidationContext {
+        pou_count: declarations.len(),
+        data_type_count: exported_data_type_count,
+        configuration_count: configurations.len(),
+        resource_count: exported_resource_count,
+        task_count: exported_task_count,
+        program_instance_count: exported_program_instance_count,
+        source_count: sources.len(),
+        analysis: source_analysis,
+    };
+    let adapter_contract = build_export_adapter_contract(target, &validation_context);
+    if let Some(contract) = &adapter_contract {
+        for diagnostic in &contract.diagnostics {
+            if !diagnostic.severity.eq_ignore_ascii_case("info") {
+                warnings.push(format!(
+                    "{} [{}]: {}",
+                    diagnostic.code,
+                    target.id(),
+                    diagnostic.message
+                ));
+            }
+        }
+    }
+
     xml.push_str("  <addData>\n");
     xml.push_str(&format!(
         "    <data name=\"{}\" handleUnknown=\"implementation\"><text><![CDATA[{}]]></text></data>\n",
         SOURCE_MAP_DATA_NAME,
         escape_cdata(&source_map_json)
     ));
+    if let Some(contract) = &adapter_contract {
+        let adapter_payload = serde_json::json!({
+            "target": target.id(),
+            "target_label": target.label(),
+            "diagnostics": contract.diagnostics,
+            "manual_steps": contract.manual_steps,
+            "limitations": contract.limitations,
+        });
+        let adapter_json = serde_json::to_string_pretty(&adapter_payload)?;
+        xml.push_str(&format!(
+            "    <data name=\"{}\" handleUnknown=\"implementation\"><text><![CDATA[{}]]></text></data>\n",
+            EXPORT_ADAPTER_DATA_NAME,
+            escape_cdata(&adapter_json)
+        ));
+    }
 
     let vendor_hook_path = project_root.join(VENDOR_EXTENSION_HOOK_FILE);
     if vendor_hook_path.is_file() {
@@ -686,9 +831,43 @@ pub fn export_project_to_xml(
         )
     })?;
 
+    let mut adapter_report_path = None;
+    let mut adapter_diagnostics = Vec::new();
+    let mut adapter_manual_steps = Vec::new();
+    let mut adapter_limitations = Vec::new();
+    if let Some(contract) = adapter_contract {
+        let adapter_path = adapter_report_path_for_output(output_path);
+        let adapter_report = PlcopenExportAdapterReport {
+            target: target.id().to_string(),
+            target_label: target.label().to_string(),
+            source_xml: output_path.to_path_buf(),
+            source_map_path: source_map_path.clone(),
+            diagnostics: contract.diagnostics,
+            manual_steps: contract.manual_steps,
+            limitations: contract.limitations,
+        };
+        let adapter_json = serde_json::to_string_pretty(&adapter_report)?;
+        std::fs::write(&adapter_path, format!("{adapter_json}\n")).with_context(|| {
+            format!(
+                "failed to write target adapter report '{}'",
+                adapter_path.display()
+            )
+        })?;
+
+        adapter_report_path = Some(adapter_path);
+        adapter_diagnostics = adapter_report.diagnostics;
+        adapter_manual_steps = adapter_report.manual_steps;
+        adapter_limitations = adapter_report.limitations;
+    }
+
     Ok(PlcopenExportReport {
+        target: target.id().to_string(),
         output_path: output_path.to_path_buf(),
         source_map_path,
+        adapter_report_path,
+        adapter_diagnostics,
+        adapter_manual_steps,
+        adapter_limitations,
         pou_count: declarations.len(),
         data_type_count: exported_data_type_count,
         configuration_count: configurations.len(),
@@ -1233,6 +1412,239 @@ fn normalize_body_text(text: impl Into<String>) -> String {
         normalized.push('\n');
     }
     normalized
+}
+
+fn analyze_export_sources(sources: &[LoadedSource]) -> ExportSourceAnalysis {
+    let mut analysis = ExportSourceAnalysis::default();
+    for source in sources {
+        let upper = source.text.to_ascii_uppercase();
+        if upper.contains("VAR RETAIN") || upper.contains(" RETAIN ") || upper.contains("\nRETAIN")
+        {
+            analysis.has_retain_keyword = true;
+        }
+        if upper.contains("%I") || upper.contains("%Q") || upper.contains("%M") {
+            analysis.has_direct_address_markers = true;
+        }
+        if upper.contains("SFB3") || upper.contains("SFB4") || upper.contains("SFB5") {
+            analysis.has_siemens_aliases = true;
+        }
+        if upper.contains("TONR") {
+            analysis.has_rockwell_aliases = true;
+        }
+        if upper.contains("R_EDGE") || upper.contains("F_EDGE") {
+            analysis.has_schneider_aliases = true;
+        }
+    }
+    analysis
+}
+
+fn adapter_report_path_for_output(output_path: &Path) -> PathBuf {
+    let file_name = output_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("plcopen.xml");
+    output_path.with_file_name(format!("{file_name}.adapter-report.json"))
+}
+
+fn export_adapter_diagnostic(
+    code: &str,
+    severity: &str,
+    message: impl Into<String>,
+    action: impl Into<String>,
+) -> PlcopenExportAdapterDiagnostic {
+    PlcopenExportAdapterDiagnostic {
+        code: code.to_string(),
+        severity: severity.to_string(),
+        message: message.into(),
+        action: action.into(),
+    }
+}
+
+fn build_export_adapter_contract(
+    target: PlcopenExportTarget,
+    context: &ExportTargetValidationContext,
+) -> Option<PlcopenExportAdapterContract> {
+    let mut diagnostics = Vec::new();
+    let has_project_model = context.configuration_count > 0
+        || context.resource_count > 0
+        || context.task_count > 0
+        || context.program_instance_count > 0;
+
+    let (manual_steps, limitations) = match target {
+        PlcopenExportTarget::Generic => return None,
+        PlcopenExportTarget::AllenBradley => {
+            diagnostics.push(export_adapter_diagnostic(
+                "PLCO7AB0",
+                "info",
+                format!(
+                    "Generated AB adapter artifact from {} source file(s) and {} ST declaration(s).",
+                    context.source_count,
+                    context.pou_count + context.data_type_count
+                ),
+                "Use the adapter report as the import checklist for Studio 5000 migration.",
+            ));
+            if has_project_model {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7AB1",
+                    "warning",
+                    "Configuration/resource/task/program bindings require manual task mapping in Studio 5000.",
+                    "Recreate periodic/continuous task wiring and bind imported program routines manually.",
+                ));
+            }
+            if context.analysis.has_direct_address_markers {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7AB2",
+                    "warning",
+                    "Detected direct `%I/%Q/%M` addressing markers.",
+                    "Map tags to controller I/O aliases manually and verify address classes before deployment.",
+                ));
+            }
+            if context.analysis.has_retain_keyword {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7AB3",
+                    "warning",
+                    "Detected RETAIN usage that may not map 1:1 to Logix persistence semantics.",
+                    "Review controller-scoped retentive tags and startup/reset behavior in commissioning tests.",
+                ));
+            }
+            if context.analysis.has_siemens_aliases || context.analysis.has_schneider_aliases {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7AB4",
+                    "warning",
+                    "Detected non-AB vendor alias symbols in ST sources.",
+                    "Normalize vendor-specific aliases to IEC/AB-native symbols before final import.",
+                ));
+            }
+
+            (
+                vec![
+                    "Import the generated PLCopen XML via your AB migration flow (converter/toolchain of choice).".to_string(),
+                    "Recreate task classes and scan rates in Studio 5000, then bind each program routine.".to_string(),
+                    "Rebind `%I/%Q/%M` markers to controller tags and physical I/O aliases.".to_string(),
+                    "Run conformance and project acceptance tests after migration.".to_string(),
+                ],
+                vec![
+                    "v1 generates PLCopen XML + adapter diagnostics, not native .L5X output.".to_string(),
+                    "AOI internals, safety signatures, and controller module metadata are not generated.".to_string(),
+                    "Retentive/runtime startup semantics require manual validation on target hardware.".to_string(),
+                ],
+            )
+        }
+        PlcopenExportTarget::Siemens => {
+            diagnostics.push(export_adapter_diagnostic(
+                "PLCO7SI0",
+                "info",
+                format!(
+                    "Generated Siemens adapter artifact from {} source file(s) and {} ST declaration(s).",
+                    context.source_count,
+                    context.pou_count + context.data_type_count
+                ),
+                "Use the adapter report as the import checklist for TIA Portal migration.",
+            ));
+            if has_project_model {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7SI1",
+                    "warning",
+                    "Configuration/resource/task/program bindings require manual OB/task mapping in TIA Portal.",
+                    "Map PLCopen tasks to cyclic/event OBs and bind program instances explicitly.",
+                ));
+            }
+            if context.analysis.has_direct_address_markers {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7SI2",
+                    "warning",
+                    "Detected direct `%I/%Q/%M` addressing markers.",
+                    "Reconcile address markers with TIA memory areas and hardware configuration manually.",
+                ));
+            }
+            if context.analysis.has_rockwell_aliases {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7SI3",
+                    "warning",
+                    "Detected Rockwell-specific library aliases in ST sources.",
+                    "Replace Rockwell aliases/functions with IEC or Siemens-native equivalents before import.",
+                ));
+            }
+
+            (
+                vec![
+                    "Import the generated PLCopen XML through your Siemens PLCopen/TIA exchange path.".to_string(),
+                    "Map tasks/program instances to OB scheduling and call hierarchy in TIA Portal.".to_string(),
+                    "Validate memory-marker and retentive data behavior against PLC commissioning tests.".to_string(),
+                    "Run conformance plus project-specific smoke tests after migration.".to_string(),
+                ],
+                vec![
+                    "v1 generates PLCopen XML + adapter diagnostics, not native .apXX/.SCL project packages.".to_string(),
+                    "Hardware topology, technology objects, and safety project metadata are not generated.".to_string(),
+                    "Vendor library semantics beyond symbol-level mapping remain manual migration work.".to_string(),
+                ],
+            )
+        }
+        PlcopenExportTarget::Schneider => {
+            diagnostics.push(export_adapter_diagnostic(
+                "PLCO7SC0",
+                "info",
+                format!(
+                    "Generated Schneider adapter artifact from {} source file(s) and {} ST declaration(s).",
+                    context.source_count,
+                    context.pou_count + context.data_type_count
+                ),
+                "Use the adapter report as the import checklist for EcoStruxure migration.",
+            ));
+            if has_project_model {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7SC1",
+                    "warning",
+                    "Configuration/resource/task/program bindings require manual task scheduling setup in EcoStruxure.",
+                    "Rebuild task classes and program assignment explicitly after import.",
+                ));
+            }
+            if context.analysis.has_direct_address_markers {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7SC2",
+                    "warning",
+                    "Detected direct `%I/%Q/%M` addressing markers.",
+                    "Rebind addressing to controller I/O map and validate with target hardware mapping rules.",
+                ));
+            }
+            if context.analysis.has_siemens_aliases || context.analysis.has_rockwell_aliases {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7SC3",
+                    "warning",
+                    "Detected non-Schneider vendor aliases in ST sources.",
+                    "Normalize aliases to IEC/Schneider-supported equivalents before import.",
+                ));
+            }
+            if context.analysis.has_retain_keyword {
+                diagnostics.push(export_adapter_diagnostic(
+                    "PLCO7SC4",
+                    "warning",
+                    "Detected RETAIN usage that may need explicit persistence configuration.",
+                    "Verify retained variable classes and persistence files in EcoStruxure runtime settings.",
+                ));
+            }
+
+            (
+                vec![
+                    "Import the generated PLCopen XML via the Schneider/CODESYS interchange path.".to_string(),
+                    "Recreate task scheduling and program assignment in EcoStruxure project settings.".to_string(),
+                    "Rebind hardware addresses and persistence settings before deployment.".to_string(),
+                    "Run conformance and project integration tests after migration.".to_string(),
+                ],
+                vec![
+                    "v1 generates PLCopen XML + adapter diagnostics, not native EcoStruxure project archives.".to_string(),
+                    "Device-tree, bus topology, and safety metadata are not generated.".to_string(),
+                    "Vendor-specific library internals remain manual migration work beyond symbol-level adaptation.".to_string(),
+                ],
+            )
+        }
+    };
+
+    Some(PlcopenExportAdapterContract {
+        diagnostics,
+        manual_steps,
+        limitations,
+    })
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -3546,6 +3958,55 @@ END_PROGRAM
         let text = std::fs::read_to_string(output).expect("read output XML");
         assert!(text.contains(VENDOR_EXT_DATA_NAME));
         assert!(text.contains("vendorData"));
+
+        let _ = std::fs::remove_dir_all(project);
+    }
+
+    #[test]
+    fn export_with_vendor_target_emits_adapter_report_and_metadata() {
+        let project = temp_dir("plcopen-export-target-ab");
+        write(
+            &project.join("sources/main.st"),
+            r#"
+PROGRAM Main
+VAR RETAIN
+    Counter : INT := 0;
+END_VAR
+(* address marker for adapter checks: %MW10 *)
+END_PROGRAM
+
+CONFIGURATION Plant
+TASK MainTask(INTERVAL := T#50ms, PRIORITY := 5);
+PROGRAM MainInstance WITH MainTask : Main;
+END_CONFIGURATION
+"#,
+        );
+
+        let output = project.join("out/plcopen.ab.xml");
+        let report =
+            export_project_to_xml_with_target(&project, &output, PlcopenExportTarget::AllenBradley)
+                .expect("export XML with target adapter");
+
+        assert_eq!(report.target, "allen-bradley");
+        let adapter_path = report
+            .adapter_report_path
+            .as_ref()
+            .expect("adapter report path");
+        assert!(adapter_path.is_file());
+        assert!(report
+            .adapter_diagnostics
+            .iter()
+            .any(|entry| entry.code == "PLCO7AB1"));
+        assert!(!report.adapter_manual_steps.is_empty());
+        assert!(!report.adapter_limitations.is_empty());
+
+        let xml_text = std::fs::read_to_string(&output).expect("read output XML");
+        assert!(xml_text.contains(EXPORT_ADAPTER_DATA_NAME));
+        assert!(xml_text.contains("allen-bradley"));
+
+        let adapter_text = std::fs::read_to_string(adapter_path).expect("read adapter report");
+        assert!(adapter_text.contains("\"target\": \"allen-bradley\""));
+        assert!(adapter_text.contains("PLCO7AB1"));
 
         let _ = std::fs::remove_dir_all(project);
     }

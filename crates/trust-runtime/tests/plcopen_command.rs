@@ -252,6 +252,7 @@ END_PROGRAM
     );
     let export_json: serde_json::Value =
         serde_json::from_slice(&export.stdout).expect("parse export JSON report");
+    assert_eq!(export_json["target"], "generic-plcopen");
     assert_eq!(export_json["pou_count"], 1);
     assert_eq!(export_json["source_count"], 1);
     assert!(export_json["source_map_path"].is_string());
@@ -287,6 +288,77 @@ END_PROGRAM
 
     let _ = std::fs::remove_dir_all(project);
     let _ = std::fs::remove_dir_all(import_project);
+}
+
+#[test]
+fn plcopen_export_target_generates_adapter_report_and_default_target_path() {
+    let project = unique_temp_dir("plcopen-cli-target-export");
+    std::fs::create_dir_all(project.join("sources")).expect("create sources");
+    std::fs::write(
+        project.join("sources/main.st"),
+        r#"
+PROGRAM Main
+VAR RETAIN
+    Counter : INT := 0;
+END_VAR
+(* marker: %MW8 *)
+END_PROGRAM
+
+CONFIGURATION Plant
+TASK MainTask(INTERVAL := T#100ms, PRIORITY := 1);
+PROGRAM MainInstance WITH MainTask : Main;
+END_CONFIGURATION
+"#,
+    )
+    .expect("write source");
+
+    let export = Command::new(env!("CARGO_BIN_EXE_trust-runtime"))
+        .args([
+            "plcopen",
+            "export",
+            "--project",
+            project.to_str().expect("project utf-8"),
+            "--target",
+            "ab",
+            "--json",
+        ])
+        .output()
+        .expect("run plcopen export target json");
+    assert!(
+        export.status.success(),
+        "expected target export success, stderr was:\n{}",
+        String::from_utf8_lossy(&export.stderr)
+    );
+
+    let export_json: serde_json::Value =
+        serde_json::from_slice(&export.stdout).expect("parse export JSON report");
+    assert_eq!(export_json["target"], "allen-bradley");
+    assert!(export_json["adapter_report_path"].is_string());
+    assert!(export_json["adapter_diagnostics"]
+        .as_array()
+        .expect("adapter diagnostics array")
+        .iter()
+        .any(|entry| entry["code"] == "PLCO7AB1"));
+    assert!(!export_json["adapter_manual_steps"]
+        .as_array()
+        .expect("adapter manual steps")
+        .is_empty());
+    assert!(!export_json["adapter_limitations"]
+        .as_array()
+        .expect("adapter limitations")
+        .is_empty());
+
+    let output_xml = project.join("interop/plcopen.ab.xml");
+    assert!(output_xml.is_file(), "expected target default output xml");
+    let adapter_report = export_json["adapter_report_path"]
+        .as_str()
+        .expect("adapter report path");
+    assert!(
+        std::path::Path::new(adapter_report).is_file(),
+        "expected adapter report file"
+    );
+
+    let _ = std::fs::remove_dir_all(project);
 }
 
 #[test]

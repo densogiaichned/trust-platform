@@ -322,6 +322,9 @@ pub enum PlcopenAction {
         /// Output XML file path (defaults to <project>/interop/plcopen.xml).
         #[arg(long = "output")]
         output: Option<PathBuf>,
+        /// Target vendor adapter profile (`generic`, `ab`, `siemens`, `schneider`).
+        #[arg(long = "target", value_enum, default_value_t = PlcopenExportTargetArg::Generic)]
+        target: PlcopenExportTargetArg,
         /// Print machine-readable JSON report.
         #[arg(long, action = ArgAction::SetTrue)]
         json: bool,
@@ -338,6 +341,21 @@ pub enum PlcopenAction {
         #[arg(long, action = ArgAction::SetTrue)]
         json: bool,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum PlcopenExportTargetArg {
+    Generic,
+    #[value(
+        alias = "allen-bradley",
+        alias = "rockwell",
+        alias = "rockwell-studio5000"
+    )]
+    Ab,
+    #[value(alias = "siemens-tia")]
+    Siemens,
+    #[value(alias = "schneider-ecostruxure", alias = "ecostruxure")]
+    Schneider,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -535,11 +553,35 @@ mod tests {
                 PlcopenAction::Export {
                     project,
                     output,
+                    target,
                     json,
                 } => {
                     assert_eq!(project, Some(PathBuf::from("project")));
                     assert_eq!(output, Some(PathBuf::from("out.xml")));
+                    assert_eq!(target, PlcopenExportTargetArg::Generic);
                     assert!(json);
+                }
+                other => panic!("expected plcopen export action, got {other:?}"),
+            },
+            other => panic!("expected plcopen command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_plcopen_export_target_command() {
+        let cli = Cli::parse_from([
+            "trust-runtime",
+            "plcopen",
+            "export",
+            "--project",
+            "project",
+            "--target",
+            "siemens",
+        ]);
+        match cli.command.expect("command") {
+            Command::Plcopen { action } => match action {
+                PlcopenAction::Export { target, .. } => {
+                    assert_eq!(target, PlcopenExportTargetArg::Siemens);
                 }
                 other => panic!("expected plcopen export action, got {other:?}"),
             },
