@@ -1,21 +1,60 @@
-# Mitsubishi GX Works3 v1 Example
+# Mitsubishi GX Works3 v1: Vendor Profile Tutorial
 
-This example demonstrates the GX Works3 compatibility baseline in truST:
+This tutorial demonstrates Mitsubishi profile behavior and its mapping to
+standard IEC edge-detection concepts.
 
-- Mitsubishi GX Works3 vendor profile (`vendor_profile = "mitsubishi"`)
-- `DIFU` / `DIFD` edge-detection aliases mapped to IEC behavior
-- deterministic formatting and diagnostics for the supported subset
+## What You Learn
+
+- `DIFU` / `DIFD` compatibility behavior
+- mapping to standard IEC equivalents (`R_TRIG` / `F_TRIG`)
+- profile comparison vs generic codesys settings
+- VS Code navigation/debug workflow for vendor syntax
 
 ## Files
 
-- `src/Main.st`: edge bridge function block using `DIFU` and `DIFD`
-- `sources/Main.st`: runtime build input mirror for CLI workflows
-- `trust-lsp.toml`: enables Mitsubishi vendor profile
+- `src/Main.st`
+- `src/Configuration.st`
+- `trust-lsp.toml`
+- `.vscode/launch.json`
 
-## Run
+## Step 1: Open + Build
 
 ```bash
-trust-runtime build --project .
+code examples/mitsubishi_gxworks3_v1
+trust-runtime build --project examples/mitsubishi_gxworks3_v1 --sources src
+trust-runtime validate --project examples/mitsubishi_gxworks3_v1
 ```
 
-To inspect GX Works3 formatting behavior in the editor, open this folder in VS Code with the truST extension and run `Structured Text: Format Document`.
+## Step 2: Understand Alias Mapping
+
+In this profile:
+
+- `DIFU` behaves as rising-edge detector (`R_TRIG` equivalent)
+- `DIFD` behaves as falling-edge detector (`F_TRIG` equivalent)
+
+Open `src/Main.st` and inspect `FB_EdgeBridge`.
+
+## Step 3: Go To Definition Exercise
+
+1. Ctrl+Click `DIFU`.
+2. Inspect resolved standard-edge definition path (profile-provided aliasing).
+3. Repeat for `DIFD`.
+
+## Step 4: Profile Comparison
+
+1. Keep `vendor_profile = "mitsubishi"` and confirm clean diagnostics.
+2. Temporarily switch to `vendor_profile = "codesys"`.
+3. Re-open `src/Main.st` and observe unsupported alias behavior.
+4. Revert to `mitsubishi`.
+
+## Step 5: Debug + Runtime Panel
+
+1. Set breakpoint after `Bridge(Signal := Pulse);`.
+2. Press `F5`.
+3. Toggle `%IX0.0` (pulse input).
+4. Observe `%QX0.0`/`%QX0.1` outputs for rising/falling edge detection.
+
+## Pitfalls
+
+- Forgetting to revert vendor profile after comparison tests.
+- Expecting `DIFU`/`DIFD` behavior in non-Mitsubishi profiles.

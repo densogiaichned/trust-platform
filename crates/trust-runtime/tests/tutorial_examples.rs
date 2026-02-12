@@ -1,4 +1,8 @@
-use trust_runtime::harness::{bytecode_module_from_source_with_path, TestHarness};
+use std::path::Path;
+
+use trust_runtime::harness::{
+    bytecode_module_from_source_with_path, bytecode_module_from_sources_with_paths, TestHarness,
+};
 use trust_runtime::value::Duration;
 
 const HELLO_COUNTER: &str = include_str!("../../../examples/tutorials/01_hello_counter.st");
@@ -11,14 +15,6 @@ const PID_LOOP: &str = include_str!("../../../examples/tutorials/07_pid_loop.st"
 const CONVEYOR_SYSTEM: &str = include_str!("../../../examples/tutorials/08_conveyor_system.st");
 const SIMULATION_COUPLING: &str =
     include_str!("../../../examples/tutorials/09_simulation_coupling.st");
-const SIEMENS_SCL_V1_MAIN: &str = include_str!("../../../examples/siemens_scl_v1/src/Main.st");
-const MITSUBISHI_GXWORKS3_V1_MAIN: &str =
-    include_str!("../../../examples/mitsubishi_gxworks3_v1/src/Main.st");
-const ETHERCAT_EK1100_ELX008_V1_MAIN: &str =
-    include_str!("../../../examples/ethercat_ek1100_elx008_v1/src/Main.st");
-const OPENPLC_INTEROP_V1_MAIN: &str =
-    include_str!("../../../examples/openplc_interop_v1/sources/main.st");
-
 const TUTORIALS: [(&str, &str); 9] = [
     ("01_hello_counter.st", HELLO_COUNTER),
     ("02_blinker.st", BLINKER),
@@ -30,6 +26,56 @@ const TUTORIALS: [(&str, &str); 9] = [
     ("08_conveyor_system.st", CONVEYOR_SYSTEM),
     ("09_simulation_coupling.st", SIMULATION_COUPLING),
 ];
+
+fn load_example_sources(example: &str) -> (Vec<String>, Vec<String>) {
+    let src_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples")
+        .join(example)
+        .join("src");
+
+    let mut files = std::fs::read_dir(&src_root)
+        .unwrap_or_else(|err| {
+            panic!(
+                "failed to read example directory {}: {err}",
+                src_root.display()
+            )
+        })
+        .map(|entry| entry.expect("directory entry").path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("st"))
+        .collect::<Vec<_>>();
+    files.sort();
+
+    let mut sources = Vec::with_capacity(files.len());
+    let mut paths = Vec::with_capacity(files.len());
+    for file in files {
+        let source = std::fs::read_to_string(&file)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", file.display()));
+        let file_name = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_else(|| panic!("invalid example file name: {}", file.display()));
+        sources.push(source);
+        paths.push(format!("{example}/{file_name}"));
+    }
+    (sources, paths)
+}
+
+fn assert_example_compiles(example: &str, label: &str) {
+    let (sources, paths) = load_example_sources(example);
+    let source_refs = sources
+        .iter()
+        .map(std::string::String::as_str)
+        .collect::<Vec<_>>();
+    let path_refs = paths
+        .iter()
+        .map(std::string::String::as_str)
+        .collect::<Vec<_>>();
+
+    TestHarness::from_sources(&source_refs)
+        .unwrap_or_else(|err| panic!("runtime compile failed for {label}: {err}"));
+    bytecode_module_from_sources_with_paths(&source_refs, &path_refs)
+        .unwrap_or_else(|err| panic!("bytecode compile failed for {label}: {err}"));
+}
 
 #[test]
 fn tutorial_examples_parse_typecheck_and_compile_to_bytecode() {
@@ -43,40 +89,25 @@ fn tutorial_examples_parse_typecheck_and_compile_to_bytecode() {
 
 #[test]
 fn siemens_scl_v1_example_parse_typecheck_and_compile_to_bytecode() {
-    TestHarness::from_source(SIEMENS_SCL_V1_MAIN)
-        .expect("runtime compile failed for Siemens SCL v1 example");
-    bytecode_module_from_source_with_path(SIEMENS_SCL_V1_MAIN, "siemens_scl_v1/Main.st")
-        .expect("bytecode compile failed for Siemens SCL v1 example");
+    assert_example_compiles("siemens_scl_v1", "Siemens SCL v1 example");
 }
 
 #[test]
 fn mitsubishi_gxworks3_v1_example_parse_typecheck_and_compile_to_bytecode() {
-    TestHarness::from_source(MITSUBISHI_GXWORKS3_V1_MAIN)
-        .expect("runtime compile failed for Mitsubishi GX Works3 v1 example");
-    bytecode_module_from_source_with_path(
-        MITSUBISHI_GXWORKS3_V1_MAIN,
-        "mitsubishi_gxworks3_v1/Main.st",
-    )
-    .expect("bytecode compile failed for Mitsubishi GX Works3 v1 example");
+    assert_example_compiles("mitsubishi_gxworks3_v1", "Mitsubishi GX Works3 v1 example");
 }
 
 #[test]
 fn ethercat_ek1100_elx008_v1_example_parse_typecheck_and_compile_to_bytecode() {
-    TestHarness::from_source(ETHERCAT_EK1100_ELX008_V1_MAIN)
-        .expect("runtime compile failed for EtherCAT EK1100/ELx008 v1 example");
-    bytecode_module_from_source_with_path(
-        ETHERCAT_EK1100_ELX008_V1_MAIN,
-        "ethercat_ek1100_elx008_v1/Main.st",
-    )
-    .expect("bytecode compile failed for EtherCAT EK1100/ELx008 v1 example");
+    assert_example_compiles(
+        "ethercat_ek1100_elx008_v1",
+        "EtherCAT EK1100/ELx008 v1 example",
+    );
 }
 
 #[test]
-fn openplc_interop_v1_example_parse_typecheck_and_compile_to_bytecode() {
-    TestHarness::from_source(OPENPLC_INTEROP_V1_MAIN)
-        .expect("runtime compile failed for OpenPLC interop v1 example");
-    bytecode_module_from_source_with_path(OPENPLC_INTEROP_V1_MAIN, "openplc_interop_v1/main.st")
-        .expect("bytecode compile failed for OpenPLC interop v1 example");
+fn plcopen_xml_st_complete_example_parse_typecheck_and_compile_to_bytecode() {
+    assert_example_compiles("plcopen_xml_st_complete", "PLCopen XML ST-complete example");
 }
 
 #[test]

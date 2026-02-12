@@ -1,28 +1,73 @@
-# Plant Demo (Structured Text)
+# Plant Demo: Multi-File Architecture Tutorial
 
-This example is a compact IEC 61131-3 Structured Text project designed to exercise multi-file symbol resolution and runtime configuration.
+This tutorial teaches how to navigate and debug a multi-file ST project in VS
+Code.
 
-## Structure
-- `src/types.st`: Shared enums and structs.
-- `src/fb_pump.st`: Function block using the shared types.
-- `src/program.st`: Program that instantiates the function block.
-- `src/config.st`: Configuration with task and I/O bindings.
+## What You Learn
 
-## Features Covered
-- TYPE declarations: enums and structs.
-- FUNCTION_BLOCK definition with a timer (TON).
-- PROGRAM that instantiates and calls a function block.
-- Configuration with a task and I/O bindings.
-- Control flow: IF/ELSE and CASE.
-- Enum literals are written as typed literals (e.g., `E_PumpState#Fault`).
+- Type + FB + Program + Configuration layering
+- Cross-file navigation/refactor workflow
+- Debugging a state machine through scan cycles
+- Project config role (`trust-lsp.toml`)
 
-## Usage
-1. Open this folder in VS Code.
-2. Open `src/program.st` to explore the sample.
-3. The files should be free of diagnostics with the current trust-lsp.
+## Project Structure
 
-## Test Plan
-1. Open the four files and confirm no diagnostics are reported.
-2. Use Go to Definition from `FB_Pump` in `src/program.st` to `src/fb_pump.st`.
-3. Hover `E_PumpState` or `ST_PumpCommand` in `src/program.st` and confirm the type info.
-4. Run `cargo test -p trust-runtime plant_demo_configuration_binds_io_and_tasks` to verify the configuration compiles.
+- `src/types.st`: shared enums/structs
+- `src/fb_pump.st`: `FB_Pump` state machine
+- `src/program.st`: orchestration logic (`PlantProgram`)
+- `src/config.st`: `CONFIGURATION`, `TASK`, program binding
+- `trust-lsp.toml`: indexing/profile settings for editor/runtime features
+
+## Step 1: Open and Build
+
+```bash
+code examples/plant_demo
+trust-runtime build --project examples/plant_demo --sources src
+trust-runtime validate --project examples/plant_demo
+```
+
+## Step 2: Cross-File Navigation (Exact Keystrokes)
+
+1. Open `src/program.st`.
+2. Hold `Ctrl` and click `FB_Pump` -> lands in `src/fb_pump.st`.
+3. Press `Alt+Left` to go back.
+4. Place cursor on `SpeedSet`, press `F2`, enter `PumpSpeedSet`.
+5. Confirm rename preview includes all impacted references.
+6. Right-click `E_PumpState` -> `Find All References` (or `Shift+F12`).
+7. Verify references appear across multiple files.
+
+## Step 3: Debugger Walkthrough
+
+1. Open `src/fb_pump.st`.
+2. Set a breakpoint inside `CASE Status.State OF`.
+3. Press `F5` (uses `.vscode/launch.json`).
+4. In Runtime Panel, toggle `%IX0.0` (start signal).
+5. Step through transitions (`Idle` -> `Starting` -> `Running`).
+6. Inspect Variables panel and inline values for `Status.State` and `ramp`.
+
+## Step 4: Understand Configuration Relationship
+
+Read `src/config.st` and map the hierarchy:
+
+- `CONFIGURATION` defines deployment root.
+- `TASK` defines scan interval/priority.
+- `PROGRAM ... WITH TASK` binds logic execution.
+- `VAR_CONFIG` binds symbols to `%I/%Q` addresses.
+
+This is the runtime wiring contract for your typed logic model.
+
+## Step 5: Guided Change Exercise
+
+1. In `src/fb_pump.st`, change:
+   - `RAMP_TIME : TIME := T#1s;` -> `T#2s`
+2. Re-run debug.
+3. Observe longer time spent in `Starting` before `Running`.
+
+## Troubleshooting
+
+- If `F5` fails:
+  - confirm `trust-debug` path in `.vscode/settings.json`.
+- If no cross-file symbols:
+  - confirm workspace root is `examples/plant_demo`.
+- If no runtime change on input toggles:
+  - confirm correct `%IX/%IW` addresses from `src/config.st`.

@@ -21,6 +21,14 @@ fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn source_root(project_root: &std::path::Path) -> PathBuf {
+    let src = project_root.join("src");
+    if src.is_dir() {
+        return src;
+    }
+    project_root.join("sources")
+}
+
 fn pou_signatures(xml_text: &str) -> Vec<(String, String, String)> {
     let doc = roxmltree::Document::parse(xml_text).expect("parse XML");
     let mut items = doc
@@ -94,11 +102,11 @@ fn plcopen_profile_json_emits_contract() {
 #[test]
 fn plcopen_export_and_import_round_trip_via_cli() {
     let source_project = unique_temp_dir("plcopen-cli-source");
-    let source_root = source_project.join("sources");
+    let source_dir = source_project.join("sources");
     let xml_a = source_project.join("out/plcopen.xml");
-    std::fs::create_dir_all(&source_root).expect("create source root");
+    std::fs::create_dir_all(&source_dir).expect("create source root");
     std::fs::write(
-        source_root.join("main.st"),
+        source_dir.join("main.st"),
         r#"
 PROGRAM Main
 VAR
@@ -109,7 +117,7 @@ END_PROGRAM
     )
     .expect("write main");
     std::fs::write(
-        source_root.join("pump.st"),
+        source_dir.join("pump.st"),
         r#"
 FUNCTION_BLOCK PumpController
 VAR_INPUT
@@ -168,10 +176,10 @@ END_FUNCTION_BLOCK
         "expected migration report path in import output, got:\n{import_stdout}"
     );
 
-    let imported_sources = imported_project.join("sources");
+    let imported_sources = source_root(&imported_project);
     assert!(
         imported_sources.is_dir(),
-        "import did not create sources directory"
+        "import did not create src/ or sources/ directory"
     );
     assert!(
         imported_project
@@ -403,14 +411,17 @@ fn plcopen_import_json_detects_openplc_ecosystem_and_shims() {
 }
 
 #[test]
-fn plcopen_openplc_example_bundle_import_export_smoke() {
+fn plcopen_openplc_fixture_in_st_complete_bundle_import_export_smoke() {
     let example_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
         .join("examples")
-        .join("openplc_interop_v1");
+        .join("plcopen_xml_st_complete");
     let fixture = example_root.join("interop/openplc.xml");
-    assert!(fixture.is_file(), "expected OpenPLC example fixture");
+    assert!(
+        fixture.is_file(),
+        "expected OpenPLC fixture in ST-complete bundle"
+    );
 
     let import_project = unique_temp_dir("plcopen-cli-openplc-example-import");
     let import = Command::new(env!("CARGO_BIN_EXE_trust-runtime"))

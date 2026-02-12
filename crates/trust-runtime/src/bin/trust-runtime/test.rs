@@ -9,6 +9,7 @@ use anyhow::Context;
 use serde_json::json;
 use smol_str::SmolStr;
 use trust_runtime::bundle::detect_bundle_path;
+use trust_runtime::bundle_builder::resolve_sources_root;
 use trust_runtime::error::RuntimeError;
 use trust_runtime::eval::call_function_block;
 use trust_runtime::harness::{CompileSession, SourceFile as HarnessSourceFile};
@@ -109,13 +110,7 @@ pub fn run_test(
             Err(_) => std::env::current_dir().context("failed to resolve current directory")?,
         },
     };
-    let sources_root = project_root.join("sources");
-    if !sources_root.is_dir() {
-        anyhow::bail!(
-            "invalid project folder '{}': missing sources/ directory",
-            project_root.display()
-        );
-    }
+    let sources_root = resolve_sources_root(&project_root, None)?;
 
     let sources = load_sources(&sources_root)?;
     if sources.is_empty() {

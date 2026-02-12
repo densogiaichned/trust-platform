@@ -18,10 +18,15 @@ END_FUNCTION_BLOCK
 PROGRAM Main
 VAR
     Counter : FB_EdgeCounter;
-    Pulse : BOOL := TRUE;
     Total : DINT;
+END_VAR
+
+VAR_EXTERNAL
+    Pulse : BOOL;
+    CountNonZero : BOOL;
 END_VAR
 
 #Counter(Enable := #Pulse);
 #Total := #Counter.Count;
+#CountNonZero := #Total > 0;
 END_PROGRAM

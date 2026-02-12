@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use smol_str::SmolStr;
 use trust_runtime::bundle::detect_bundle_path;
+use trust_runtime::bundle_builder::resolve_sources_root;
 use trust_syntax::lexer::{self, Token, TokenKind};
 use trust_syntax::parser;
 use trust_syntax::syntax::{SyntaxKind, SyntaxNode};
@@ -106,13 +107,7 @@ pub fn run_docs(
             Err(_) => std::env::current_dir().context("failed to resolve current directory")?,
         },
     };
-    let sources_root = project_root.join("sources");
-    if !sources_root.is_dir() {
-        anyhow::bail!(
-            "invalid project folder '{}': missing sources/ directory",
-            project_root.display()
-        );
-    }
+    let sources_root = resolve_sources_root(&project_root, None)?;
 
     let sources = load_sources(&project_root, &sources_root)?;
     if sources.is_empty() {

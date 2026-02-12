@@ -445,7 +445,7 @@ pub fn supported_profile() -> PlcopenProfile {
             PlcopenCompatibilityMatrixEntry {
                 capability: "PLCopen dataTypes import (elementary/derived/array/struct/enum/subrange subset)",
                 status: "supported",
-                notes: "Supported dataType baseType nodes are imported into generated ST TYPE declarations under sources/.",
+                notes: "Supported dataType baseType nodes are imported into generated ST TYPE declarations under src/ (or sources/ for legacy projects).",
             },
             PlcopenCompatibilityMatrixEntry {
                 capability: "PLCopen dataTypes export (elementary/derived/array/struct/enum/subrange subset)",
@@ -486,7 +486,7 @@ pub fn supported_profile() -> PlcopenProfile {
             "Round-trip guarantees preserve supported ST dataType signatures (name + supported baseType graph).",
             "Round-trip guarantees preserve supported configuration/resource/task/program-instance wiring intent.",
             "Round-trip does not preserve vendor formatting/layout, graphical networks, or runtime deployment metadata.",
-            "Round-trip can rename output source files to sanitized unique names inside sources/.",
+            "Round-trip can rename output source files to sanitized unique names inside src/ (or sources/ for legacy projects).",
             "Round-trip may normalize selected vendor library symbols to IEC equivalents when shim rules apply during import.",
             "Round-trip preserves unknown vendor addData as opaque fragments, not executable semantics.",
         ],
@@ -507,18 +507,45 @@ pub fn export_project_to_xml(
     export_project_to_xml_with_target(project_root, output_path, PlcopenExportTarget::Generic)
 }
 
+fn resolve_existing_source_root(project_root: &Path) -> anyhow::Result<PathBuf> {
+    let src_root = project_root.join("src");
+    if src_root.is_dir() {
+        return Ok(src_root);
+    }
+
+    let sources_root = project_root.join("sources");
+    if sources_root.is_dir() {
+        return Ok(sources_root);
+    }
+
+    anyhow::bail!(
+        "invalid project folder '{}': missing src/ or sources/ directory",
+        project_root.display()
+    );
+}
+
+fn resolve_or_create_source_root(project_root: &Path) -> anyhow::Result<PathBuf> {
+    let src_root = project_root.join("src");
+    if src_root.is_dir() {
+        return Ok(src_root);
+    }
+
+    let sources_root = project_root.join("sources");
+    if sources_root.is_dir() {
+        return Ok(sources_root);
+    }
+
+    std::fs::create_dir_all(&src_root)
+        .with_context(|| format!("failed to create '{}'", src_root.display()))?;
+    Ok(src_root)
+}
+
 pub fn export_project_to_xml_with_target(
     project_root: &Path,
     output_path: &Path,
     target: PlcopenExportTarget,
 ) -> anyhow::Result<PlcopenExportReport> {
-    let sources_root = project_root.join("sources");
-    if !sources_root.is_dir() {
-        anyhow::bail!(
-            "invalid project folder '{}': missing sources/ directory",
-            project_root.display()
-        );
-    }
+    let sources_root = resolve_existing_source_root(project_root)?;
 
     let sources = load_sources(project_root, &sources_root)?;
     if sources.is_empty() {
@@ -927,9 +954,7 @@ pub fn import_xml_to_project(
     let source_map = parse_embedded_source_map(root);
     let detected_ecosystem = detect_vendor_ecosystem(root, &xml_text);
 
-    let sources_root = project_root.join("sources");
-    std::fs::create_dir_all(&sources_root)
-        .with_context(|| format!("failed to create '{}'", sources_root.display()))?;
+    let sources_root = resolve_or_create_source_root(project_root)?;
 
     if let Some((path, count)) = import_data_types_to_sources(
         root,

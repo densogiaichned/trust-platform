@@ -1,0 +1,12 @@
+CONFIGURATION MitsubishiDemo
+VAR_GLOBAL
+    Pulse AT %IX0.0 : BOOL;
+    RiseSeen AT %QX0.0 : BOOL;
+    FallSeen AT %QX0.1 : BOOL;
+END_VAR
+
+RESOURCE MitsubishiRes ON PLC
+TASK Cycle (INTERVAL := T#50ms, PRIORITY := 1);
+PROGRAM Main WITH Cycle : Main;
+END_RESOURCE
+END_CONFIGURATION

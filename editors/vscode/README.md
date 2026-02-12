@@ -51,6 +51,7 @@ code --install-extension trust-platform.trust-lsp
 
 Use the GitHub repo examples instead:
 
+- Guided tutorial index: https://github.com/johannesPettersson80/trust-platform/tree/main/examples/README.md
 - Filling line demo: https://github.com/johannesPettersson80/trust-platform/tree/main/examples/filling_line
 - Plant demo: https://github.com/johannesPettersson80/trust-platform/tree/main/examples/plant_demo
 
@@ -88,6 +89,19 @@ Open it in VS Code:
 - `Structured Text: Run Test`
 - `Structured Text: Move Namespace`
 - `Structured Text: Create/Select Configuration`
+
+## PLCopen XML Import (UI Flow)
+
+Use this when you want to create a truST project from an existing PLCopen XML file.
+
+1. Press `Ctrl+Shift+P`.
+2. Run **`Structured Text: Import PLCopen XML`**.
+3. Pick the input XML file.
+4. Pick the target project folder.
+5. Confirm overwrite when importing into a non-empty folder.
+
+The command runs `trust-runtime plcopen import --json` in the background and
+lets you open the imported project and migration report after completion.
 
 ---
 

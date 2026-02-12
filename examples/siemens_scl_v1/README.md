@@ -1,20 +1,58 @@
-# Siemens SCL v1 Example
+# Siemens SCL v1: Vendor Profile Tutorial
 
-This example demonstrates the Siemens SCL compatibility baseline in truST:
+This tutorial demonstrates Siemens profile behavior in VS Code and shows how to
+compare it against a generic profile.
 
-- `#`-prefixed local/instance references (for example `#Total`, `#Counter`)
-- Siemens vendor formatting profile (`vendor_profile = "siemens"`)
-- deterministic diagnostics/formatting behavior for the supported subset
+## What You Learn
+
+- `#`-prefixed identifier support
+- Siemens profile formatting/diagnostics behavior
+- Hover/completion resolution for `#` symbols
+- Runtime/debug launch from this example project
 
 ## Files
 
-- `src/Main.st`: edge counter function block and program using `#`-prefixed references
-- `trust-lsp.toml`: enables Siemens vendor profile
+- `src/Main.st`
+- `src/Configuration.st`
+- `trust-lsp.toml`
+- `.vscode/launch.json`
 
-## Run
+## Step 1: Open + Build
 
 ```bash
-trust-runtime build --project .
+code examples/siemens_scl_v1
+trust-runtime build --project examples/siemens_scl_v1 --sources src
+trust-runtime validate --project examples/siemens_scl_v1
 ```
 
-To inspect Siemens formatting behavior in the editor, open this folder in VS Code with the truST extension and run `Structured Text: Format Document`.
+## Step 2: Completion and Hover with `#` Prefix
+
+1. Open `src/Main.st`.
+2. Type `#` and trigger completion (`Ctrl+Space`).
+3. Hover `#Counter` and `#Total` to inspect resolved types.
+4. Confirm no unexpected diagnostics with Siemens profile enabled.
+
+## Step 3: Formatting Comparison
+
+1. Keep `vendor_profile = "siemens"`.
+2. Run `Shift+Alt+F` and note style.
+3. Temporarily switch to `vendor_profile = "codesys"`.
+4. Re-open/format and compare behavior.
+5. Switch back to `siemens`.
+
+## Step 4: Profile Comparison Exercise
+
+1. With `codesys`, confirm `#` references produce compatibility issues.
+2. Restore `siemens` and confirm diagnostics clear.
+
+## Step 5: Debug/Runtime Launch
+
+1. Set breakpoint in `FB_EdgeCounter`.
+2. Press `F5`.
+3. Toggle `%IX0.0` (mapped pulse input) in Runtime Panel.
+4. Observe `%QX0.0` transition as count indicator.
+
+## Pitfalls
+
+- Forgetting to revert profile back to `siemens` after comparison.
+- Assuming generic profile accepts Siemens `#` style everywhere.

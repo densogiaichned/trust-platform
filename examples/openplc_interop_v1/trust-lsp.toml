@@ -1,6 +1,0 @@
-[project]
-name = "openplc-interop-v1"
-vendor_profile = "codesys"
-
-[runtime]
-cycle_ms = 100

@@ -52,6 +52,18 @@ Capture/update media checklist: `editors/vscode/assets/README.md`
 4. Press **Start** in the runtime panel.
 5. Set input values under **I/O → Inputs** and observe **Outputs** update live.
 
+### Import PLCopen XML from VS Code (60 seconds)
+
+1. Open **Command Palette** (`Ctrl+Shift+P`).
+2. Run **`Structured Text: Import PLCopen XML`**.
+3. Select the PLCopen XML file to import.
+4. Select the target project folder (new or existing).
+5. Confirm overwrite if the target folder is not empty.
+
+Example XML to try from this repository:
+
+- `examples/plcopen_xml_st_complete/interop/codesys-small.xml`
+
 Command line install:
 
 ```bash
@@ -140,6 +152,7 @@ starts a local runtime for debugging and inline values.
 ## Documentation
 
 - `docs/README.md` — documentation index and diagram workflow
+- `examples/README.md` — guided example/tutorial tracks with setup walkthroughs
 - `docs/guides/PLC_QUICK_START.md` — hands-on quick start
 - `docs/guides/EDITOR_SETUP_NEOVIM_ZED.md` — Neovim + Zed setup and validation contract
 - `docs/specs/README.md` — IEC 61131-3 specs and tooling references

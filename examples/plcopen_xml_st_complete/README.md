@@ -1,44 +1,62 @@
-# PLCopen XML ST-Complete Example
+# PLCopen XML ST-Complete: VS Code-First Tutorial
 
-This example shows end-to-end PLCopen XML import/export for an ST-complete
-project (POUs + `TYPE` graph + configuration/resource/task/program-instance
-model).
+This is the primary PLCopen XML tutorial for users.
 
-## What Is Included
+Primary flow: import from VS Code command palette.
 
-- Native ST project sources under `sources/`:
-  - `main.st`: `PROGRAM` + `FUNCTION_BLOCK`
-  - `types.st`: enum/struct/subrange/array `TYPE` declarations
-  - `configuration.st`: `CONFIGURATION` + `RESOURCE` + `TASK` + `PROGRAM` binding
-- A CODESYS-style PLCopen XML import sample:
+Secondary flow: CLI commands for CI/automation.
+
+## What This Covers
+
+- VS Code command: `Structured Text: Import PLCopen XML`
+- Post-import code exploration in editor
+- CLI import/export round-trip alternative
+- OpenPLC ecosystem detection note
+
+## Tutorial Assets
+
+- Native ST project source: `src/`
+- PLCopen fixtures:
   - `interop/codesys-small.xml`
+  - `interop/openplc.xml`
 
-## Preconditions
+## Step 1 (Primary): Import XML via VS Code
 
-- `trust-runtime` is built and available in your shell.
-- Run commands from repo root (`trust-platform/`).
-
-## Flow A: Export ST Project -> PLCopen XML
+1. Open repository in VS Code:
 
 ```bash
-trust-runtime plcopen export \
-  --project examples/plcopen_xml_st_complete \
-  --output examples/plcopen_xml_st_complete/interop/exported.xml --json
+code /path/to/trust-platform
 ```
 
-Expected outputs:
+2. `Ctrl+Shift+P` -> `Structured Text: Import PLCopen XML`
+3. Select input XML:
+   - start with `examples/plcopen_xml_st_complete/interop/codesys-small.xml`
+4. Select target folder (for example `/tmp/trust-plcopen-import`)
+5. Open migration report when prompted
 
-- `examples/plcopen_xml_st_complete/interop/exported.xml`
-- `examples/plcopen_xml_st_complete/interop/exported.source-map.json`
-- JSON report containing at least:
-  - `pou_count`
-  - `data_type_count`
-  - `configuration_count`
-  - `resource_count`
-  - `task_count`
-  - `program_instance_count`
+## Step 2: Post-Import Exploration (Editor)
 
-## Flow B: Import PLCopen XML -> ST Project
+In the imported project folder:
+
+1. Open generated ST files under `src/`.
+2. Confirm diagnostics are clean.
+3. Ctrl+Click imported type names to verify go-to-definition works.
+4. Run `Shift+Alt+F` on imported files to normalize formatting.
+
+## Step 3: OpenPLC Detection Note
+
+Repeat Step 1 using:
+
+- `examples/plcopen_xml_st_complete/interop/openplc.xml`
+
+In migration report, expect:
+
+- `detected_ecosystem = "openplc"`
+- possible shim entries such as `R_EDGE -> R_TRIG`
+
+## Step 4 (Alternative): CLI Import/Export
+
+Import:
 
 ```bash
 mkdir -p /tmp/trust-plcopen-import
@@ -47,45 +65,34 @@ trust-runtime plcopen import \
   --project /tmp/trust-plcopen-import --json
 ```
 
-Expected outputs:
-
-- Imported ST files under `/tmp/trust-plcopen-import/sources/`
-  - POU sources
-  - generated `TYPE` source (`plcopen_data_types*.st`)
-  - generated configuration source (`plcopen_configuration_*.st`)
-- Migration report:
-  - `/tmp/trust-plcopen-import/interop/plcopen-migration-report.json`
-
-## Flow C: Deterministic Round-Trip Check
-
-Export after import, re-import, and export again. For supported ST structures,
-POU/type/configuration signatures should be stable.
+Export:
 
 ```bash
 trust-runtime plcopen export \
   --project /tmp/trust-plcopen-import \
-  --output /tmp/trust-plcopen-import/interop/roundtrip-a.xml
-
-mkdir -p /tmp/trust-plcopen-roundtrip
-trust-runtime plcopen import \
-  --input /tmp/trust-plcopen-import/interop/roundtrip-a.xml \
-  --project /tmp/trust-plcopen-roundtrip
-
-trust-runtime plcopen export \
-  --project /tmp/trust-plcopen-roundtrip \
-  --output /tmp/trust-plcopen-roundtrip/interop/roundtrip-b.xml
+  --output /tmp/trust-plcopen-import/interop/roundtrip.xml --json
 ```
 
-The CI regression gate for this is:
+## Step 5: Deterministic Round-Trip Check
 
-- `crates/trust-runtime/tests/plcopen_st_complete_parity.rs`
+```bash
+trust-runtime plcopen export \
+  --project examples/plcopen_xml_st_complete \
+  --output examples/plcopen_xml_st_complete/interop/exported.xml --json
+```
 
-and uses fixture packs in:
+Then import the exported XML to a new folder and export again. Supported
+ST-structure signatures should remain stable.
 
-- `crates/trust-runtime/tests/fixtures/plcopen/codesys_st_complete/`
+## Pitfalls and Fixes
 
-## Out Of Scope (By Design)
+- Importing into non-empty target folder:
+  - fix: choose empty folder or confirm overwrite intentionally.
+- Non-ST content in source XML (FBD/LD/SFC):
+  - fix: treat as expected unsupported diagnostics in migration report.
+- Imported files look inconsistent:
+  - fix: run format document after import.
 
-- FBD/LD/SFC graphical network semantics.
-- Vendor-specific deployment/safety metadata execution.
-- Full vendor library semantic equivalence beyond documented shim mappings.
+## Debug/Launch
+
+Use `.vscode/launch.json` for quick debug entry from this example folder.

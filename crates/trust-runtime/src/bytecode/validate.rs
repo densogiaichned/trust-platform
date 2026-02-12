@@ -6,9 +6,9 @@ use std::collections::HashSet;
 
 use super::reader::BytecodeReader;
 use super::{
-    BytecodeError, BytecodeModule, ConstEntry, ConstPool, DebugMap, IoMap, PouIndex, RefSegment,
-    RefTable, ResourceMeta, RetainInit, SectionData, SectionId, StringTable, TypeData, TypeEntry,
-    TypeKind, TypeTable, VarMeta,
+    BytecodeError, BytecodeModule, ConstEntry, ConstPool, DebugMap, IoMap, PouIndex, PouKind,
+    RefSegment, RefTable, ResourceMeta, RetainInit, SectionData, SectionId, StringTable, TypeData,
+    TypeEntry, TypeKind, TypeTable, VarMeta,
 };
 
 impl BytecodeModule {
@@ -58,7 +58,7 @@ impl BytecodeModule {
         validate_const_pool(strings, types, const_pool)?;
         validate_ref_table(strings, ref_table)?;
         validate_pou_index(strings, types, const_pool, pou_index, pou_bodies)?;
-        validate_resource_meta(strings, ref_table, resource_meta)?;
+        validate_resource_meta(strings, ref_table, pou_index, resource_meta)?;
         validate_io_map(strings, types, ref_table, io_map)?;
         if let Some(SectionData::VarMeta(meta)) = self.section(SectionId::VarMeta) {
             validate_var_meta(strings, types, const_pool, ref_table, meta)?;
@@ -434,8 +434,23 @@ fn validate_instruction_stream(
 fn validate_resource_meta(
     strings: &StringTable,
     ref_table: &RefTable,
+    pou_index: &PouIndex,
     meta: &ResourceMeta,
 ) -> Result<(), BytecodeError> {
+    let mut program_names = HashSet::new();
+    for entry in &pou_index.entries {
+        if entry.kind == PouKind::Program {
+            let name = strings
+                .entries
+                .get(entry.name_idx as usize)
+                .ok_or_else(|| BytecodeError::InvalidIndex {
+                    kind: "string".into(),
+                    index: entry.name_idx,
+                })?;
+            program_names.insert(name.to_ascii_uppercase());
+        }
+    }
+
     for resource in &meta.resources {
         ensure_string_index(strings, resource.name_idx)?;
         for task in &resource.tasks {
@@ -445,6 +460,17 @@ fn validate_resource_meta(
             }
             for idx in &task.program_name_idx {
                 ensure_string_index(strings, *idx)?;
+                let name = strings.entries.get(*idx as usize).ok_or_else(|| {
+                    BytecodeError::InvalidIndex {
+                        kind: "string".into(),
+                        index: *idx,
+                    }
+                })?;
+                if !program_names.contains(&name.to_ascii_uppercase()) {
+                    return Err(BytecodeError::InvalidSection(
+                        format!("task references unknown program '{}'", name).into(),
+                    ));
+                }
             }
             for idx in &task.fb_ref_idx {
                 if *idx as usize >= ref_table.entries.len() {

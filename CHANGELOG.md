@@ -6,7 +6,7 @@ The format is based on Keep a Changelog and this project adheres to Semantic Ver
 
 ## [Unreleased]
 
-Target release: `v0.7.12`
+Target release: `v0.7.14`
 
 ### Added
 
@@ -14,12 +14,19 @@ Target release: `v0.7.12`
   - Added command `Structured Text: Import PLCopen XML` (`trust-lsp.plcopen.import`) for CLI-backed PLCopen project import from the editor.
   - Command flow prompts for input XML + target project folder, validates conflict paths, runs `trust-runtime plcopen import --json`, and offers quick access to the generated migration report.
   - Added VS Code integration coverage for success/cancel/conflict/invalid-input paths in `editors/vscode/src/test/suite/plcopen-import.test.ts`.
+  - Added explicit import usage docs in `README.md`, `docs/README.md`, `editors/vscode/README.md`, and PLCopen example READMEs.
+- Guided example/tutorial expansion:
+  - Added `examples/README.md` as a structured tutorial index with recommended learning order and setup checklist.
+  - Added a full walkthrough for `examples/filling_line/README.md` (run, I/O mapping, expected outcomes, and tuning exercise).
+  - Reworked example READMEs (`plant_demo`, `memory_marker_counter`, `siemens_scl_v1`, `mitsubishi_gxworks3_v1`, `ethercat_ek1100_elx008_v1`, `plcopen_xml_st_complete`, `tutorials`) into detailed step-by-step VS Code setup guides.
+  - Added `examples/vendor_library_stubs/` as a tutorial for user-provided vendor library stub indexing (`[[libraries]]`) with Siemens-style sample declarations.
+  - Removed `examples/openplc_interop_v1/` (content absorbed into `examples/plcopen_xml_st_complete/`).
+  - Removed `examples/browser_analysis_wasm_spike/` (prototype assets moved to `docs/internal/prototypes/browser_analysis_wasm_spike/`).
 - OpenPLC Interop v1 deliverable closure:
   - Added dedicated OpenPLC migration guide: `docs/guides/OPENPLC_INTEROP_V1.md`.
-  - Added end-to-end OpenPLC sample bundle with native/export/import walkthrough:
-    - `examples/openplc_interop_v1/README.md`
-    - `examples/openplc_interop_v1/interop/openplc.xml`
-    - `examples/openplc_interop_v1/sources/main.st`
+  - Added OpenPLC fixture and walkthrough coverage inside the PLCopen ST-complete bundle:
+    - `examples/plcopen_xml_st_complete/README.md`
+    - `examples/plcopen_xml_st_complete/interop/openplc.xml`
   - Added regression coverage to keep the OpenPLC sample bundle executable in CI:
     - `crates/trust-runtime/tests/plcopen_command.rs`
     - `crates/trust-runtime/tests/tutorial_examples.rs`
@@ -27,8 +34,8 @@ Target release: `v0.7.12`
   - Added new browser/WASM analysis adapter crate `crates/trust-wasm-analysis/` exposing deterministic diagnostics, hover, and completion APIs for virtual-document analysis.
   - Added JSON boundary wrapper `WasmAnalysisEngine` for worker/browser transport integration (`applyDocumentsJson`, `diagnosticsJson`, `hoverJson`, `completionJson`, `statusJson`).
   - Added parity + performance regression suite against native analysis in `crates/trust-wasm-analysis/tests/mp010_parity.rs`.
-  - Added browser worker host example and build pipeline:
-    - `examples/browser_analysis_wasm_spike/`
+  - Added browser worker host prototype assets and build pipeline:
+    - `docs/internal/prototypes/browser_analysis_wasm_spike/`
     - `scripts/build_browser_analysis_wasm_spike.sh`
     - `scripts/check_mp010_browser_analysis.sh`
   - Published scope contract and evidence report:
@@ -85,8 +92,8 @@ Target release: `v0.7.12`
   - stable failure reason taxonomy (`conformance/failure-taxonomy.md`)
   - `--update-expected` mode for deterministic artifact refresh
 - ST unit-testing tutorials:
-  - `examples/tutorials/unit_testing_101/`
-  - `examples/tutorials/unit_testing_102/`
+  - `examples/tutorials/10_unit_testing_101/`
+  - `examples/tutorials/11_unit_testing_102/`
 - Salsa hardening gates and overnight validation scripts/reports:
   - `scripts/salsa_*_gate.sh`
   - `scripts/salsa_overnight_hardening.sh`
@@ -117,6 +124,8 @@ Target release: `v0.7.12`
     - `imported_data_types`, `discovered_configurations`, `imported_configurations`, `imported_resources`, `imported_tasks`, `imported_program_instances` (import/migration)
   - Added CODESYS ST-complete fixture packs (`small`/`medium`/`large`) with deterministic expected migration artifacts and CI schema-drift parity gate in `crates/trust-runtime/tests/plcopen_st_complete_parity.rs`.
   - Updated PLCopen compatibility/spec docs and added end-to-end import/export example project in `examples/plcopen_xml_st_complete/`.
+- `trust-runtime build`, `trust-runtime test`, and `trust-runtime docs` now resolve project source roots as `src/` first with fallback to legacy `sources/`.
+- `trust-runtime build --sources <relative-path>` now resolves relative source overrides from `--project`, avoiding path-resolution mismatches from external working directories.
 - `trust-runtime plcopen export` and `trust-runtime plcopen import` now support `--json` for machine-readable report output.
 - `trust-runtime plcopen profile` now publishes a compatibility matrix plus round-trip limits/known-gaps contract fields.
 - `trust-runtime plcopen import` compatibility scoring now accounts for shimmed vendor-library aliases as partial-coverage items.
@@ -147,6 +156,8 @@ Target release: `v0.7.12`
 - Release workflow hardening:
   - VS Code Marketplace publish now runs per-VSIX with retry/backoff on transient network timeouts and treats already-published artifacts as idempotent success for reruns.
 - VS Code Marketplace screenshots now use absolute image URLs from GitHub raw content so images render reliably in extension listing pages.
+- `trust-runtime validate` no longer reports false `undefined program` errors for valid bundles; it now validates decoded bytecode/module metadata directly and enforces task-program name integrity at bytecode-validation time.
+- Bytecode encoding/validation now handles enum-typed constant payloads correctly during module build/validation.
 - `%MW` memory marker force/write synchronization in runtime I/O panel flow.
 - Debug adapter force latch behavior and state-lock interaction.
 - Debug runner now respects configured task interval pacing.

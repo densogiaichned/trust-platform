@@ -33,12 +33,12 @@ Core adapter crate:
 - `crates/trust-wasm-analysis/`
 - exposes `BrowserAnalysisEngine` (native API) and `WasmAnalysisEngine` (JSON boundary for browser bindings)
 
-Browser host example:
-- `examples/browser_analysis_wasm_spike/`
+Browser host prototype assets:
+- `docs/internal/prototypes/browser_analysis_wasm_spike/`
 - worker transport shim:
-  - `examples/browser_analysis_wasm_spike/web/worker.js`
-  - `examples/browser_analysis_wasm_spike/web/main.js`
-  - `examples/browser_analysis_wasm_spike/web/index.html`
+  - `docs/internal/prototypes/browser_analysis_wasm_spike/web/worker.js`
+  - `docs/internal/prototypes/browser_analysis_wasm_spike/web/main.js`
+  - `docs/internal/prototypes/browser_analysis_wasm_spike/web/index.html`
 
 ## API Boundary
 

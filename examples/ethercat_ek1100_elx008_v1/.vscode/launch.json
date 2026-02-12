@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "structured-text",
+      "request": "launch",
+      "name": "Debug EtherCAT Example",
+      "program": "${workspaceFolder}/src/config.st",
+      "stopOnEntry": false
+    }
+  ]
+}

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::json;
 use smol_str::SmolStr;
 use trust_runtime::bundle::detect_bundle_path;
+use trust_runtime::bytecode::BytecodeModule;
 use trust_runtime::config::RuntimeBundle;
 use trust_runtime::control::{
     ControlEndpoint, ControlServer, ControlState, SourceFile, SourceRegistry,
@@ -148,8 +149,13 @@ pub fn run_validate(bundle: PathBuf, ci: bool) -> anyhow::Result<()> {
             .validate(driver.name.as_str(), &driver.params)
             .map_err(anyhow::Error::from)?;
     }
-    let mut runtime = Runtime::new();
-    runtime.apply_bytecode_bytes(&bundle.bytecode, Some(&bundle.runtime.resource_name))?;
+    let module = BytecodeModule::decode(&bundle.bytecode)?;
+    module.validate()?;
+    let metadata = module.metadata()?;
+    let _resource = metadata
+        .resource(bundle.runtime.resource_name.as_str())
+        .or_else(|| metadata.primary_resource())
+        .ok_or_else(|| anyhow::anyhow!("bytecode metadata missing resource definitions"))?;
     if ci {
         let io_drivers = bundle
             .io

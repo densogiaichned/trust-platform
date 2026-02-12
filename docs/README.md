@@ -13,6 +13,11 @@ See `docs/reports/README.md` for what is kept there vs. what should go to `logs/
 
 Implementation planning notes and remediation checklists live in `docs/internal/`.
 
+## Guided Examples
+
+Hands-on setup tutorials and example learning tracks are indexed in:
+`examples/README.md`.
+
 ## Conformance Suite
 
 Conformance scope, naming rules, and summary-contract artifacts are in
@@ -28,9 +33,12 @@ and known gaps are documented in:
 ST-complete import/export walkthrough example:
 `examples/plcopen_xml_st_complete/README.md`.
 
+VS Code command workflow for XML import:
+`README.md` and `editors/vscode/README.md` (`Structured Text: Import PLCopen XML`).
+
 OpenPLC ST-focused migration guide and end-to-end sample bundle:
 - `docs/guides/OPENPLC_INTEROP_V1.md`
-- `examples/openplc_interop_v1/README.md`
+- `examples/plcopen_xml_st_complete/README.md` (OpenPLC fixture: `interop/openplc.xml`)
 
 ## Vendor Library Compatibility
 
@@ -62,7 +70,7 @@ features, and go/no-go decision are documented in:
 `docs/guides/BROWSER_ANALYSIS_WASM_SPIKE.md`.
 
 Browser host example and build harness:
-- `examples/browser_analysis_wasm_spike/`
+- `docs/internal/prototypes/browser_analysis_wasm_spike/`
 - `scripts/build_browser_analysis_wasm_spike.sh`
 - `scripts/check_mp010_browser_analysis.sh`
 

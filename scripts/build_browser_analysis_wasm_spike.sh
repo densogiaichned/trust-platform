@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="${ROOT_DIR}/target/browser-analysis-wasm"
 PKG_DIR="${OUT_DIR}/pkg"
-WEB_SRC="${ROOT_DIR}/examples/browser_analysis_wasm_spike/web"
+WEB_SRC="${ROOT_DIR}/docs/internal/prototypes/browser_analysis_wasm_spike/web"
 WEB_OUT="${OUT_DIR}/web"
 
 if ! command -v wasm-pack >/dev/null 2>&1; then

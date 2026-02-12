@@ -414,6 +414,27 @@ END_PROGRAM
 }
 
 #[test]
+fn encoder_validates_enum_constant_payloads() {
+    let source = r#"
+TYPE
+    E_Mode : (Idle := 0, Run := 1);
+END_TYPE
+
+PROGRAM Main
+VAR
+    state : E_Mode := E_Mode#Idle;
+    is_idle : BOOL;
+END_VAR
+
+is_idle := state = E_Mode#Idle;
+END_PROGRAM
+"#;
+
+    let module = bytecode_module_from_source(source).unwrap();
+    module.validate().unwrap();
+}
+
+#[test]
 fn encoder_emits_debug_map() {
     let source = r#"
 PROGRAM Main

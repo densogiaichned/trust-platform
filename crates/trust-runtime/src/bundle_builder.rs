@@ -28,11 +28,7 @@ pub fn build_program_stbc(
     bundle_root: &Path,
     sources_root: Option<&Path>,
 ) -> anyhow::Result<BundleBuildReport> {
-    let default_sources = bundle_root.join("sources");
-    let sources_root = canonicalize_or_self(sources_root.unwrap_or(&default_sources));
-    if !sources_root.is_dir() {
-        anyhow::bail!("sources directory not found: {}", sources_root.display());
-    }
+    let sources_root = resolve_sources_root(bundle_root, sources_root)?;
 
     let dependencies = resolve_local_dependencies(bundle_root)?;
     let mut source_roots = vec![sources_root.clone()];
@@ -66,6 +62,44 @@ pub fn build_program_stbc(
             .map(|dependency| dependency.name.clone())
             .collect(),
     })
+}
+
+/// Resolve the effective project source root for bundle operations.
+///
+/// Behavior:
+/// - if `sources_root` is provided and relative, it is resolved relative to `bundle_root`
+/// - default search prefers `src/`, then falls back to legacy `sources/`
+pub fn resolve_sources_root(
+    bundle_root: &Path,
+    sources_root: Option<&Path>,
+) -> anyhow::Result<PathBuf> {
+    if let Some(override_root) = sources_root {
+        let resolved = if override_root.is_absolute() {
+            override_root.to_path_buf()
+        } else {
+            bundle_root.join(override_root)
+        };
+        let resolved = canonicalize_or_self(&resolved);
+        if !resolved.is_dir() {
+            anyhow::bail!("sources directory not found: {}", resolved.display());
+        }
+        return Ok(resolved);
+    }
+
+    let src_root = bundle_root.join("src");
+    if src_root.is_dir() {
+        return Ok(canonicalize_or_self(&src_root));
+    }
+
+    let legacy_sources_root = bundle_root.join("sources");
+    if legacy_sources_root.is_dir() {
+        return Ok(canonicalize_or_self(&legacy_sources_root));
+    }
+
+    anyhow::bail!(
+        "invalid project folder '{}': missing src/ or sources/ directory",
+        bundle_root.display()
+    );
 }
 
 fn resolve_local_dependencies(bundle_root: &Path) -> anyhow::Result<Vec<ResolvedDependency>> {
@@ -188,6 +222,10 @@ fn parse_dependency_specs(
 }
 
 fn preferred_dependency_sources_root(path: &Path) -> PathBuf {
+    let src = path.join("src");
+    if src.is_dir() {
+        return src;
+    }
     let sources = path.join("sources");
     if sources.is_dir() {
         sources

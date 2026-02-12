@@ -1,5 +1,6 @@
 [project]
 name = "plcopen-xml-st-complete"
+include_paths = ["src"]
 vendor_profile = "codesys"
 
 [runtime]

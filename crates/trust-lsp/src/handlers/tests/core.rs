@@ -2126,6 +2126,7 @@ fn lsp_tutorial_examples_no_unexpected_diagnostics_snapshot() {
 #[test]
 fn lsp_siemens_hash_prefixed_example_has_no_unexpected_diagnostics() {
     let source = include_str!("../../../../../examples/siemens_scl_v1/src/Main.st");
+    let configuration = include_str!("../../../../../examples/siemens_scl_v1/src/Configuration.st");
 
     let state = ServerState::new();
     let root_uri = tower_lsp::lsp_types::Url::parse("file:///workspace/").expect("workspace uri");
@@ -2165,6 +2166,11 @@ fn lsp_siemens_hash_prefixed_example_has_no_unexpected_diagnostics() {
     let uri =
         tower_lsp::lsp_types::Url::parse("file:///workspace/examples/siemens_scl_v1/src/Main.st")
             .expect("siemens example uri");
+    let configuration_uri = tower_lsp::lsp_types::Url::parse(
+        "file:///workspace/examples/siemens_scl_v1/src/Configuration.st",
+    )
+    .expect("siemens configuration uri");
+    state.open_document(configuration_uri, 1, configuration.to_string());
     state.open_document(uri.clone(), 1, source.to_string());
 
     let file_id = state.get_document(&uri).expect("example document").file_id;
@@ -2194,6 +2200,8 @@ fn lsp_siemens_hash_prefixed_example_has_no_unexpected_diagnostics() {
 #[test]
 fn lsp_mitsubishi_gxworks3_example_has_no_unexpected_diagnostics() {
     let source = include_str!("../../../../../examples/mitsubishi_gxworks3_v1/src/Main.st");
+    let configuration =
+        include_str!("../../../../../examples/mitsubishi_gxworks3_v1/src/Configuration.st");
 
     let state = ServerState::new();
     let root_uri = tower_lsp::lsp_types::Url::parse("file:///workspace/").expect("workspace uri");
@@ -2234,6 +2242,11 @@ fn lsp_mitsubishi_gxworks3_example_has_no_unexpected_diagnostics() {
         "file:///workspace/examples/mitsubishi_gxworks3_v1/src/Main.st",
     )
     .expect("mitsubishi example uri");
+    let configuration_uri = tower_lsp::lsp_types::Url::parse(
+        "file:///workspace/examples/mitsubishi_gxworks3_v1/src/Configuration.st",
+    )
+    .expect("mitsubishi configuration uri");
+    state.open_document(configuration_uri, 1, configuration.to_string());
     state.open_document(uri.clone(), 1, source.to_string());
 
     let file_id = state.get_document(&uri).expect("example document").file_id;

@@ -54,3 +54,85 @@ corresponding ecosystem is detected.
 - Run conformance and project-level runtime tests after import.
 - If a required vendor block is missing from this catalog, add a fixture, define
   a deterministic mapping contract, and extend this guide before claiming support.
+
+## User-Provided Library Definitions (Recommended)
+
+When your project uses vendor blocks that are not in the shim catalog, the
+recommended path is to provide local ST library stubs and index them in
+`trust-lsp.toml`.
+
+This gives deterministic editor semantics while you incrementally migrate vendor
+code.
+
+### 1) Create a stub library folder
+
+Example layout:
+
+```text
+my-project/
+  src/
+  vendor/
+    siemens/
+      tcon.st
+      norm_scale.st
+  trust-lsp.toml
+```
+
+### 2) Add `trust-lsp.toml` library entries
+
+```toml
+[project]
+include_paths = ["src"]
+
+[[libraries]]
+name = "siemens-stubs"
+path = "vendor/siemens"
+version = "0.1.0"
+```
+
+Multiple vendor packs can be added with additional `[[libraries]]` entries.
+
+### 3) Write stub declarations
+
+Use interface-style ST declarations for missing vendor symbols. Minimal method
+or body logic is enough; semantic behavior is not required for indexing.
+
+Example:
+
+```st
+FUNCTION_BLOCK TCON
+VAR_INPUT
+    REQ : BOOL;
+END_VAR
+VAR_OUTPUT
+    DONE : BOOL;
+    ERROR : BOOL;
+    STATUS : WORD;
+END_VAR
+END_FUNCTION_BLOCK
+```
+
+### 4) Reload workspace and verify
+
+In VS Code:
+
+1. Reload window (`Developer: Reload Window`).
+2. Open project ST files using vendor symbols.
+3. Verify diagnostics clear for declared symbols.
+4. Verify completion/hover/go-to-definition resolve into your stub files.
+
+### What Works With Stub Libraries
+
+- Symbol resolution and missing-symbol diagnostics suppression for declared items.
+- Completion, hover, and go-to-definition for stubbed FB/FUNCTION/TYPE symbols.
+- Cross-file navigation and reference indexing for the provided declarations.
+
+### What Stub Libraries Do Not Provide
+
+- Runtime-equivalent vendor behavior.
+- Automatic migration of proprietary AOI internals or safety metadata.
+- Verified semantic equivalence without project-specific validation/testing.
+
+Reference tutorial/example:
+
+- `examples/vendor_library_stubs/`

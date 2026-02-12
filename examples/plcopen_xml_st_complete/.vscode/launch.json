@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "structured-text",
+      "request": "launch",
+      "name": "Debug PLCopen ST-Complete",
+      "program": "${workspaceFolder}/src/configuration.st",
+      "stopOnEntry": false
+    }
+  ]
+}

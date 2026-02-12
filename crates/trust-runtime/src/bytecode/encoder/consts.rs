@@ -5,8 +5,19 @@ use super::{BytecodeEncoder, BytecodeError, ConstEntry};
 
 impl<'a> BytecodeEncoder<'a> {
     pub(super) fn const_index_for(&mut self, value: &Value) -> Result<u32, BytecodeError> {
-        let type_id = type_id_for_value(value)
-            .ok_or_else(|| BytecodeError::InvalidSection("unsupported const value".into()))?;
+        let type_id = match value {
+            Value::Enum(enum_value) => self
+                .runtime
+                .registry()
+                .lookup(&enum_value.type_name)
+                .ok_or_else(|| {
+                    BytecodeError::InvalidSection(
+                        format!("unsupported const enum type '{}'", enum_value.type_name).into(),
+                    )
+                })?,
+            _ => type_id_for_value(value)
+                .ok_or_else(|| BytecodeError::InvalidSection("unsupported const value".into()))?,
+        };
         let type_idx = self.type_index(type_id)?;
         let payload = encode_const_payload(value)?;
         let idx = self.const_pool.len() as u32;

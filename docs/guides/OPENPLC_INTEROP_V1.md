@@ -46,15 +46,16 @@ The report is written to:
 
 ## End-to-End Sample Bundle
 
-Use the dedicated sample bundle for deterministic walkthroughs:
+OpenPLC fixture coverage is now integrated into the ST-complete PLCopen tutorial
+bundle:
 
-- `examples/openplc_interop_v1/`
+- `examples/plcopen_xml_st_complete/`
+- Legacy path `examples/openplc_interop_v1/` was retired after consolidation.
 
-It includes:
+Use:
 
-- `interop/openplc.xml` OpenPLC-style fixture
-- `sources/main.st` native truST source for export path validation
-- step-by-step commands in `examples/openplc_interop_v1/README.md`
+- `examples/plcopen_xml_st_complete/interop/openplc.xml`
+- walkthrough in `examples/plcopen_xml_st_complete/README.md`
 
 ## Diagnostics You Should Expect
 

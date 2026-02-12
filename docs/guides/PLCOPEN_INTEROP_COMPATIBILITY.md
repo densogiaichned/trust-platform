@@ -163,4 +163,4 @@ A complete import/export walkthrough project is available in:
 OpenPLC ST-focused migration guide and sample bundle:
 
 - `docs/guides/OPENPLC_INTEROP_V1.md`
-- `examples/openplc_interop_v1/`
+- `examples/plcopen_xml_st_complete/` (`interop/openplc.xml`)
