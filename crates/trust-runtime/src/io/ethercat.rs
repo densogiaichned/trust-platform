@@ -8,7 +8,7 @@ use std::time::{Duration as StdDuration, Instant};
 
 #[cfg(all(feature = "ethercat-wire", unix))]
 use ethercrab::std::{ethercat_now, tx_rx_task};
-#[cfg(feature = "ethercat-wire")]
+#[cfg(all(feature = "ethercat-wire", unix))]
 use ethercrab::{
     subdevice_group::Op, MainDevice, MainDeviceConfig, PduStorage, SubDeviceGroup, Timeouts,
 };
@@ -151,19 +151,19 @@ impl EthercatBus for MockEthercatBus {
     }
 }
 
-#[cfg(feature = "ethercat-wire")]
+#[cfg(all(feature = "ethercat-wire", unix))]
 const ETHERCAT_MAX_SUBDEVICES: usize = 64;
-#[cfg(feature = "ethercat-wire")]
+#[cfg(all(feature = "ethercat-wire", unix))]
 const ETHERCAT_MAX_PDI: usize = 4096;
-#[cfg(feature = "ethercat-wire")]
+#[cfg(all(feature = "ethercat-wire", unix))]
 const ETHERCAT_MAX_FRAMES: usize = 32;
-#[cfg(feature = "ethercat-wire")]
+#[cfg(all(feature = "ethercat-wire", unix))]
 const ETHERCAT_MAX_PDU_DATA: usize = PduStorage::element_size(ETHERCAT_MAX_PDI);
 
-#[cfg(feature = "ethercat-wire")]
+#[cfg(all(feature = "ethercat-wire", unix))]
 type EthercrabGroup = SubDeviceGroup<ETHERCAT_MAX_SUBDEVICES, ETHERCAT_MAX_PDI, Op>;
 
-#[cfg(feature = "ethercat-wire")]
+#[cfg(all(feature = "ethercat-wire", unix))]
 struct EthercrabBus {
     runtime: TokioRuntime,
     maindevice: Arc<MainDevice<'static>>,
@@ -171,102 +171,87 @@ struct EthercrabBus {
     transport_error: Arc<Mutex<Option<SmolStr>>>,
 }
 
-#[cfg(feature = "ethercat-wire")]
+#[cfg(all(feature = "ethercat-wire", unix))]
 impl EthercrabBus {
     fn new(config: &EthercatConfig) -> Result<Self, RuntimeError> {
-        #[cfg(not(unix))]
-        {
-            let _ = config;
-            return Err(RuntimeError::InvalidConfig(
-                "ethercat hardware transport is only supported on unix targets in this build"
-                    .into(),
-            ));
-        }
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .map_err(|err| {
+                RuntimeError::IoDriver(format!("ethercat tokio runtime init failed: {err}").into())
+            })?;
+        let storage = Box::leak(Box::new(PduStorage::<
+            ETHERCAT_MAX_FRAMES,
+            ETHERCAT_MAX_PDU_DATA,
+        >::new()));
+        let (tx, rx, pdu_loop) = storage
+            .try_split()
+            .map_err(|_| RuntimeError::IoDriver("ethercat PDU storage split failed".into()))?;
 
-        #[cfg(unix)]
-        {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(2)
-                .enable_all()
-                .build()
-                .map_err(|err| {
-                    RuntimeError::IoDriver(
-                        format!("ethercat tokio runtime init failed: {err}").into(),
-                    )
-                })?;
-            let storage = Box::leak(Box::new(PduStorage::<
-                ETHERCAT_MAX_FRAMES,
-                ETHERCAT_MAX_PDU_DATA,
-            >::new()));
-            let (tx, rx, pdu_loop) = storage
-                .try_split()
-                .map_err(|_| RuntimeError::IoDriver("ethercat PDU storage split failed".into()))?;
+        let timeouts = Timeouts {
+            pdu: config.timeout,
+            state_transition: config.timeout.max(StdDuration::from_secs(1)),
+            mailbox_response: config.timeout.max(StdDuration::from_millis(250)),
+            ..Timeouts::default()
+        };
 
-            let timeouts = Timeouts {
-                pdu: config.timeout,
-                state_transition: config.timeout.max(StdDuration::from_secs(1)),
-                mailbox_response: config.timeout.max(StdDuration::from_millis(250)),
-                ..Timeouts::default()
+        let maindevice = Arc::new(MainDevice::new(
+            pdu_loop,
+            timeouts,
+            MainDeviceConfig::default(),
+        ));
+        let transport_error = Arc::new(Mutex::new(None));
+
+        let tx_rx_future = tx_rx_task(config.adapter.as_str(), tx, rx).map_err(|err| {
+            RuntimeError::IoDriver(
+                format!("ethercat transport '{}' open failed: {err}", config.adapter).into(),
+            )
+        })?;
+        let transport_error_ref = Arc::clone(&transport_error);
+        runtime.spawn(async move {
+            let message = match tx_rx_future.await {
+                Ok(_) => SmolStr::new("ethercat transport loop exited"),
+                Err(err) => SmolStr::new(format!("ethercat transport loop failed: {err}")),
             };
+            let mut guard = transport_error_ref
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner());
+            *guard = Some(message);
+        });
 
-            let maindevice = Arc::new(MainDevice::new(
-                pdu_loop,
-                timeouts,
-                MainDeviceConfig::default(),
-            ));
-            let transport_error = Arc::new(Mutex::new(None));
-
-            let tx_rx_future = tx_rx_task(config.adapter.as_str(), tx, rx).map_err(|err| {
+        let group = runtime
+            .block_on(
+                maindevice
+                    .init_single_group::<ETHERCAT_MAX_SUBDEVICES, ETHERCAT_MAX_PDI>(ethercat_now),
+            )
+            .map_err(|err| {
                 RuntimeError::IoDriver(
-                    format!("ethercat transport '{}' open failed: {err}", config.adapter).into(),
+                    format!(
+                        "ethercat discovery/init failed on '{}': {err}",
+                        config.adapter
+                    )
+                    .into(),
                 )
             })?;
-            let transport_error_ref = Arc::clone(&transport_error);
-            runtime.spawn(async move {
-                let message = match tx_rx_future.await {
-                    Ok(_) => SmolStr::new("ethercat transport loop exited"),
-                    Err(err) => SmolStr::new(format!("ethercat transport loop failed: {err}")),
-                };
-                let mut guard = transport_error_ref
-                    .lock()
-                    .unwrap_or_else(|poison| poison.into_inner());
-                *guard = Some(message);
-            });
-
-            let group = runtime
-                .block_on(
-                    maindevice.init_single_group::<ETHERCAT_MAX_SUBDEVICES, ETHERCAT_MAX_PDI>(
-                        ethercat_now,
-                    ),
+        let group = runtime
+            .block_on(group.into_op(maindevice.as_ref()))
+            .map_err(|err| {
+                RuntimeError::IoDriver(
+                    format!(
+                        "ethercat PRE-OP -> OP failed on '{}': {err}",
+                        config.adapter
+                    )
+                    .into(),
                 )
-                .map_err(|err| {
-                    RuntimeError::IoDriver(
-                        format!(
-                            "ethercat discovery/init failed on '{}': {err}",
-                            config.adapter
-                        )
-                        .into(),
-                    )
-                })?;
-            let group = runtime
-                .block_on(group.into_op(maindevice.as_ref()))
-                .map_err(|err| {
-                    RuntimeError::IoDriver(
-                        format!(
-                            "ethercat PRE-OP -> OP failed on '{}': {err}",
-                            config.adapter
-                        )
-                        .into(),
-                    )
-                })?;
+            })?;
 
-            Ok(Self {
-                runtime,
-                maindevice,
-                group,
-                transport_error,
-            })
-        }
+        Ok(Self {
+            runtime,
+            maindevice,
+            group,
+            transport_error,
+        })
     }
 
     fn check_transport_error(&self) -> Result<(), RuntimeError> {
@@ -347,7 +332,7 @@ impl EthercrabBus {
     }
 }
 
-#[cfg(feature = "ethercat-wire")]
+#[cfg(all(feature = "ethercat-wire", unix))]
 impl EthercatBus for EthercrabBus {
     fn discover(&mut self, _config: &EthercatConfig) -> Result<EthercatDiscovery, RuntimeError> {
         self.tx_rx()?;
@@ -544,9 +529,17 @@ fn build_bus(config: &EthercatConfig) -> Result<Box<dyn EthercatBus>, RuntimeErr
         return Ok(Box::new(MockEthercatBus::new(config)));
     }
 
-    #[cfg(feature = "ethercat-wire")]
+    #[cfg(all(feature = "ethercat-wire", unix))]
     {
         Ok(Box::new(EthercrabBus::new(config)?))
+    }
+
+    #[cfg(all(feature = "ethercat-wire", not(unix)))]
+    {
+        let _ = config;
+        Err(RuntimeError::InvalidConfig(
+            "ethercat hardware transport is only supported on unix targets in this build".into(),
+        ))
     }
 
     #[cfg(not(feature = "ethercat-wire"))]

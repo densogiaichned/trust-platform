@@ -40,6 +40,7 @@ handlers::tests::core::lsp_learner_diagnostics_include_did_you_mean_and_conversi
 handlers::tests::core::lsp_learner_diagnostics_include_syntax_habit_hints: test
 handlers::tests::core::lsp_learner_diagnostics_no_hint_noise_on_valid_code: test
 handlers::tests::core::lsp_linked_editing_ranges: test
+handlers::tests::core::lsp_mitsubishi_gxworks3_example_has_no_unexpected_diagnostics: test
 handlers::tests::core::lsp_oop_access_diagnostics_include_explainer_and_hint: test
 handlers::tests::core::lsp_pull_diagnostics_returns_unchanged_and_explainer: test
 handlers::tests::core::lsp_references_variable: test
@@ -63,6 +64,7 @@ handlers::tests::formatting_and_navigation::lsp_code_lens_references: test
 handlers::tests::formatting_and_navigation::lsp_document_link_config_paths: test
 handlers::tests::formatting_and_navigation::lsp_document_link_using_directive: test
 handlers::tests::formatting_and_navigation::lsp_formatting_accepts_snake_case_client_keys: test
+handlers::tests::formatting_and_navigation::lsp_formatting_mitsubishi_profile_keeps_spaced_style: test
 handlers::tests::formatting_and_navigation::lsp_formatting_prefers_camel_case_when_both_aliases_present: test
 handlers::tests::formatting_and_navigation::lsp_formatting_siemens_profile_preserves_hash_prefixed_references: test
 handlers::tests::formatting_and_navigation::lsp_formatting_snapshot: test

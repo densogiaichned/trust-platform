@@ -41,8 +41,10 @@ sha2 = "0.10"
 rustls = "0.20"
 rustls-pemfile = "0.2.1"
 opcua = { version = "0.12", default-features = false, features = ["server", "client", "vendored-openssl"], optional = true }
-ethercrab = { version = "0.6", optional = true }
 tokio = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+ethercrab = { version = "0.6", optional = true }
 
 [features]
 default = ["debug", "ethercat-wire"]
